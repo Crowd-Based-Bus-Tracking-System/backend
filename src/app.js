@@ -1,14 +1,14 @@
 import dotenv from "dotenv";
-import express from "express";
-import cors from "cors";
-import { initDb } from "./db/init.js";
+dotenv.config();
+
+const express = (await import("express")).default;
+const cors = (await import("cors")).default;
+const { initDb } = await import("./db/init.js");
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
-
-dotenv.config();
 
 const PORT = process.env.PORT || 3000;
 

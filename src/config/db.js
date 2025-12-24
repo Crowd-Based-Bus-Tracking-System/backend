@@ -2,11 +2,11 @@ import pkg from "pg";
 const { Pool } = pkg;
 
 const pool = new Pool({
-    host: process.env.PGHOST,
-    port: parseInt(process.env.PGPORT) || 5432,
-    database: process.env.PGDATABASE,
-    user: process.env.PGUSER,
-    password: process.env.PGPASSWORD,
+    host: process.env.SUPABASE_HOST,
+    port: parseInt(process.env.PG_PORT) || 5432,
+    database: process.env.PG_DATABASE,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
     ssl: {
         rejectUnauthorized: false,
     },
