@@ -1,8 +1,6 @@
 import { parse } from "dotenv";
 import redis from "../config/redis";
 
-const statKey = `reporter:${userId}:stats`;
-
 export const storeReporterPosition = async (data) => {
     const {
         busId,
@@ -29,7 +27,7 @@ export const getReporterPosition = async (userId) => {
 }
 
 
-export const getReporterPositions = async (userIds=[]) => {
+export const getReporterPositions = async (userIds = []) => {
     const arr = await Promise.all(
         userIds.map(id => redis.hgetall(`reporter:${id}:pos`))
     )
@@ -38,19 +36,21 @@ export const getReporterPositions = async (userIds=[]) => {
 
 
 export const increaseReporterStatsOnConfirm = async (userId) => {
+    const statKey = `reporter:${userId}:stats`;
     await redis.hincrby(statKey, "total_reports", 1);
-    await redis.hincrby(statKey, "confirmed_reports", 1);   
+    await redis.hincrby(statKey, "confirmed_reports", 1);
 
     const values = await redis.hgetall(statKey);
     const total = parseInt(values.total_reports || "0", 10);
     const confirmed = parseInt(values.confirmed_reports || "0", 10);
-    
+
     const accuracy = total === 0 ? 0 : (confirmed / total);
     await redis.hset(statKey, "accuracy", String(accuracy));
 }
 
 
 export const increaseReporterStatsOnReport = async (userId) => {
+    const statKey = `reporter:${userId}:stats`;
     await redis.hincrby(statKey, "total_reports", 1);
 
     const values = await redis.hgetall(statKey);
@@ -60,6 +60,7 @@ export const increaseReporterStatsOnReport = async (userId) => {
     const accuracy = total === 0 ? 0 : (confirmed / total);
     await redis.hset(statKey, "accuracy", String(accuracy));
 }
+
 
 export const getReporterStats = async (userId) => {
     return redis.hgetall(`reporter:${userId}:stats`);

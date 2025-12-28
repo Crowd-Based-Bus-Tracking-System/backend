@@ -34,7 +34,7 @@ export const reportArrival = async (data) => {
                 message: "Arrival already reported"
             }
         }
-
+        
         const reporterPosRes = await storeReporterPosition(data);
         console.log("Reporter Position", reporterPosRes);
 
