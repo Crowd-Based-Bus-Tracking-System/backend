@@ -1,4 +1,4 @@
-export function distanceInMeters(lat1, lon1, lat2, lon2) {
+export default function distanceInMeters(lat1, lon1, lat2, lon2) {
   const R = 6371000;
   const toRad = (deg) => (deg * Math.PI) / 180;
 
