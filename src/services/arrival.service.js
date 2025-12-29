@@ -1,6 +1,7 @@
 import redis from "../config/redis.js";
 import { checkDistance } from "../utils/check-distance.js";
 import { storeReporterPosition } from "./reporter.service.js";
+import { validateArrivalWithML, storeArrivalForTraining } from "./ml-arrival-confirmation/mlIntegration.service.js";
 
 
 export const reportArrival = async (data) => {
@@ -34,7 +35,7 @@ export const reportArrival = async (data) => {
                 message: "Arrival already reported"
             }
         }
-        
+
         const reporterPosRes = await storeReporterPosition(data);
         console.log("Reporter Position", reporterPosRes);
 
@@ -49,20 +50,46 @@ export const reportArrival = async (data) => {
         multi.expire(reportKey, 120);
 
         const replies = await multi.exec();
-        if (replies[2] >= MIN_REPORTS) {
+        const reportCount = replies[2];
+
+        const mlResult = await validateArrivalWithML(data, reportKey);
+
+        if (mlResult.mlConfirmed !== null) {
+            console.log(`ML prediction: ${mlResult.mlConfirmed ? "CONFIRM" : "REJECT"} (probability: ${mlResult.probability?.toFixed(3)})`);
+        }
+
+        const shouldConfirm = reportCount >= MIN_REPORTS && mlResult.mlConfirmed === true;
+
+        console.log(`Validation: Reports=${reportCount}/${MIN_REPORTS}, ML=${mlResult.mlConfirmed}, Confirm=${shouldConfirm}`);
+
+        if (shouldConfirm) {
             await redis.set(confirmedKey, true, "EX", ARRIVAL_EXPIRATION);
 
             await redis.set(`bus:${busId}:last_stop`, stopId.toString());
             await redis.set(`bus:${busId}:last_arrival_time`, arrivalTime.toString());
 
-            // await save_arrval({ busId, stopId, arrivalTime });
+            if (mlResult.features && mlResult.probability !== null) {
+                await storeArrivalForTraining(mlResult.features, mlResult.probability);
+            }
 
             return {
                 confirmed: true,
-                message: `Arrival confirmed at ${arrivalTime}`
+                message: `Arrival confirmed at ${arrivalTime}`,
+                mlProbability: mlResult.probability,
+                reportCount: reportCount
             }
         }
-        return { confirmed: false }
+
+        if (mlResult.features && mlResult.probability !== null) {
+            await storeArrivalForTraining(mlResult.features, mlResult.probability);
+        }
+
+        return {
+            confirmed: false,
+            message: `Insufficient validation: ${reportCount}/${MIN_REPORTS} reports, ML: ${mlResult.mlConfirmed}`,
+            mlProbability: mlResult.probability,
+            reportCount: reportCount
+        }
     } catch (error) {
         console.log(error);
         return { confirmed: false }
