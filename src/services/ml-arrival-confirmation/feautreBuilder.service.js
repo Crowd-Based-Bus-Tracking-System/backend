@@ -4,8 +4,9 @@ import { getReporterPositions, getReporterStats } from "../reporter.service";
 import { parseMembersWithScores } from "../../utils/helpers";
 import { mean, median, stddev, msToSec } from "../../utils/math";
 
+const RADIUS = 100;
 
-const buildFeatures = async (data, reportKey, userDist) => {
+const buildFeatures = async (data, reportKey) => {
     const {
         busId,
         stopId,
@@ -13,10 +14,11 @@ const buildFeatures = async (data, reportKey, userDist) => {
         user
     } = data;
 
+    const now = Date.now();
     const members = await redis.zrange(reportKey, 0, -1, "WITHSCORES");
     const reporters = parseMembersWithScores(members);
     const firstTs = reporters.length ? reporters[0].ts : arrivalTime;
-    const lastTs = reporters.length ? reporters[reporters.lenght - 1].ts : arrivalTime;
+    const lastTs = reporters.length ? reporters[reporters.length - 1].ts : arrivalTime;
 
     const spanS = (lastTs - firstTs) / 1000;
 
@@ -72,6 +74,18 @@ const buildFeatures = async (data, reportKey, userDist) => {
     const tMean = mean(reporterTimestamps);
     const tStd = stddev(reporterTimestamps);
 
+    const arrivalDate = new Date(arrivalTime);
+    const hourOfDay = arrivalDate.getHours();
+    const dayOfWeek = arrivalDate.getDay();
+    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6 ? 1 : 0;
+
+    const isRushHour = ((hourOfDay >= 7 && hourOfDay < 10) || (hourOfDay >= 17 && hourOfDay < 20)) ? 1 : 0;
+
+    const isEarlyMorning = (hourOfDay >= 5 && hourOfDay < 9) ? 1 : 0;
+    const isMidDay = (hourOfDay >= 9 && hourOfDay < 17) ? 1 : 0;
+    const isEvening = (hourOfDay >= 17 && hourOfDay < 21) ? 1 : 0;
+    const isNight = (hourOfDay >= 21 || hourOfDay < 5) ? 1 : 0;
+
     const features = {
         bus_id: busId,
         stop_id: stopId,
@@ -91,7 +105,17 @@ const buildFeatures = async (data, reportKey, userDist) => {
         time_since_last_arrival_s: timeSinceLastArrivalS,
         t_mean: tMean,
         t_std: tStd,
+        hour_of_day: hourOfDay,
+        day_of_week: dayOfWeek,
+        is_weekend: isWeekend,
+        is_rush_hour: isRushHour,
+        is_early_morning: isEarlyMorning,
+        is_mid_day: isMidDay,
+        is_evening: isEvening,
+        is_night: isNight,
     };
 
     return features;
 }
+
+export default buildFeatures;
