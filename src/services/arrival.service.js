@@ -1,6 +1,6 @@
 import redis from "../config/redis.js";
 import { checkDistance } from "../utils/check-distance.js";
-import { storeReporterPosition } from "./reporter.service.js";
+import { storeReporterPosition, increaseReporterStatsOnReport, increaseReporterStatsOnConfirm } from "./reporter.service.js";
 import { validateArrivalWithML, storeArrivalForTraining } from "./ml-arrival-confirmation/mlIntegration.service.js";
 
 
@@ -52,6 +52,8 @@ export const reportArrival = async (data) => {
         const replies = await multi.exec();
         const reportCount = replies[2][1];
 
+        await increaseReporterStatsOnReport(user.id);
+
         const mlResult = await validateArrivalWithML(data, reportKey);
 
         if (mlResult.mlConfirmed !== null) {
@@ -67,6 +69,11 @@ export const reportArrival = async (data) => {
 
             await redis.set(`bus:${busId}:last_stop`, stopId.toString());
             await redis.set(`bus:${busId}:last_arrival_time`, arrivalTime.toString());
+
+            const members = await redis.zrange(reportKey, 0, -1);
+            for (const reporterId of members) {
+                await increaseReporterStatsOnConfirm(reporterId);
+            }
 
             if (mlResult.features && mlResult.probability !== null) {
                 await storeArrivalForTraining(mlResult.features, mlResult.probability);
