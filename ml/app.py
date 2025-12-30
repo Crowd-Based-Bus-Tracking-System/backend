@@ -1,6 +1,6 @@
 from fastapi import FastAPI
-from ml.training.train_arrival import train_all_models
-from ml.training.predict_arrival import predict_arrival
+from training.train_arrival import train_all_models
+from inference.predict_arrival import predict_arrival
 from pydantic import BaseModel
 import pandas as pd
 
@@ -21,7 +21,7 @@ def predict(data: ArrivalFeatures):
 @app.post("/store-arrival")
 def store(data: ArrivalFeatures):
     df = pd.DataFrame([data.features | {"label": data.label}])
-    df.to_csv("data/arrivals.csv", mode="a", header=False, index=False)
+    df.to_csv("data/arrivals/arrivals.csv", mode="a", header=False, index=False)
     return {"status": "stored"}
 
 @app.post("/train-arrival")

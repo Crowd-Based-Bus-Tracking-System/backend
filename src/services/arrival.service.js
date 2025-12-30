@@ -15,7 +15,7 @@ export const reportArrival = async (data) => {
     const MIN_REPORTS = 3;
     const MIN_REPORT_INTERVAL = 60 * 1000;
     const ARRIVAL_EXPIRATION = 300;
-    const RADIUS_MIN_METERS = 40;
+    const RADIUS_MIN_METERS = 30000;
 
     try {
         console.log(`Checking arrival report for bus ${busId} at stop ${stopId} from user ${user.id}`);
@@ -50,7 +50,7 @@ export const reportArrival = async (data) => {
         multi.expire(reportKey, 120);
 
         const replies = await multi.exec();
-        const reportCount = replies[2];
+        const reportCount = replies[2][1];
 
         const mlResult = await validateArrivalWithML(data, reportKey);
 
