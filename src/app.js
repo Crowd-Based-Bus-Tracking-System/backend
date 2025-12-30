@@ -1,7 +1,8 @@
 import dotenv from "dotenv";
 dotenv.config();
 
-import arrivalRouter from "./routers/arrival.route.js"; 
+import arrivalRouter from "./routes/arrival.route.js"; 
+import mlIntegrationRouter from "./routes/mlIntegration.route.js";
 
 const express = (await import("express")).default;
 const cors = (await import("cors")).default;
@@ -14,6 +15,7 @@ app.use(cors());
 app.use(express.json());
 
 app.use("/api/arrival", arrivalRouter);
+app.use("/api/mlIntegration", mlIntegrationRouter);
 
 async function startServer() {
     try {
