@@ -1,94 +1,104 @@
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.metrics import accuracy_score, classification_report
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.svm import SVC
+from sklearn.linear_model import LinearRegression, Ridge, Lasso
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.svm import SVR
 import joblib
 import os
 
 
-DATA_PATH = "../data/arrivals.csv"
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_PATH = os.path.join(SCRIPT_DIR, "..", "data", "arrivals", "arrivals.csv")
+
 def train_all_models(data_path=DATA_PATH):
-    df = pd.read_csv(DATA_PATH)
+    df = pd.read_csv(data_path)
 
     FEATURE_COLUMNS = [
-        bus_id,
-        stop_id,
-        arrival_time,
-        report_count,
-        unique_reporters,
-        reports_per_minute,
-        time_since_last_report_s,
-        time_since_first_report_s,
-        distance_mean,
-        distance_median,
-        distance_std,
-        pct_within_radius,
-        acc_mean,
-        weighted_dist_mean,
-        prev_arrival_time,
-        time_since_last_arrival_s,
-        t_mean,
-        t_std,
-        hour_of_day,
-        day_of_week,
-        is_weekend,
-        is_rush_hour,
-        is_early_morning,
-        is_mid_day,
-        is_evening,
-        is_night,
+        "bus_id",
+        "stop_id",
+        "arrival_time",
+        "report_count",
+        "unique_reporters",
+        "reports_per_minute",
+        "time_since_last_report_s",
+        "time_since_first_report_s",
+        "distance_mean",
+        "distance_median",
+        "distance_std",
+        "pct_within_radius",
+        "acc_mean",
+        "weighted_dist_mean",
+        "prev_arrival_time",
+        "time_since_last_arrival_s",
+        "t_mean",
+        "t_std",
+        "hour_of_day",
+        "day_of_week",
+        "is_weekend",
+        "is_rush_hour",
+        "is_early_morning",
+        "is_mid_day",
+        "is_evening",
+        "is_night",
     ]
 
     X = df[FEATURE_COLUMNS]
     y = df["confirm_prob"]
 
     X_train, X_val, y_train, y_val = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
+        X, y, test_size=0.2, random_state=42
     )
 
     models = {
-        "logistic": {
+        "linear_regression": {
             "pipeline": Pipeline([
                 ("scaler", StandardScaler()),
-                ("clf", LogisticRegression(max_iter=200))
+                ("reg", LinearRegression())
+            ]),
+            "params": {}
+        },
+        "ridge": {
+            "pipeline": Pipeline([
+                ("scaler", StandardScaler()),
+                ("reg", Ridge())
             ]),
             "params": {
-                "clf__C": [0.1, 1, 10]
+                "reg__alpha": [0.1, 1, 10]
             }
         },
         "random_forest": {
             "pipeline": Pipeline([
-                ("clf", RandomForestClassifier())
+                ("reg", RandomForestRegressor(random_state=42))
             ]),
             "params": {
-                "clf__n_estimators": [100, 200],
-                "clf__max_depth": [None, 10, 20],
-                "clf__min_samples_split": [2, 5]
+                "reg__n_estimators": [100, 200],
+                "reg__max_depth": [None, 10, 20],
+                "reg__min_samples_split": [2, 5]
             }
         },
         "gradient_boosting": {
             "pipeline": Pipeline([
-                ("clf", GradientBoostingClassifier())
+                ("reg", GradientBoostingRegressor(random_state=42))
             ]),
             "params": {
-                "clf__n_estimators": [100, 200],
-                "clf__learning_rate": [0.05, 0.1],
-                "clf__max_depth": [3, 5]
+                "reg__n_estimators": [100, 200],
+                "reg__learning_rate": [0.05, 0.1],
+                "reg__max_depth": [3, 5]
             }
         },
-        "svm": {
+        "svr": {
             "pipeline": Pipeline([
                 ("scaler", StandardScaler()),
-                ("clf", SVC(probability=True))
+                ("reg", SVR())
             ]),
             "params": {
-                "clf__C": [0.5, 1, 5],
-                "clf__kernel": ["rbf"]
+                "reg__C": [0.5, 1, 5],
+                "reg__kernel": ["rbf"]
             }
         }
     }
@@ -103,27 +113,44 @@ def train_all_models(data_path=DATA_PATH):
         grid = GridSearchCV(
             cfg["pipeline"],
             cfg["params"],
-            scoring="accuracy",
+            scoring="neg_mean_squared_error",
             cv=5,
             n_jobs=-1
         )
 
         grid.fit(X_train, y_train)
         preds = grid.predict(X_val)
-        acc = accuracy_score(y_val, preds)
+        
+        mse = mean_squared_error(y_val, preds)
+        rmse = np.sqrt(mse)
+        mae = mean_absolute_error(y_val, preds)
+        r2 = r2_score(y_val, preds)
 
-        print(f"{name} accuracy: {acc:.4f}")
-        print(classification_report(y_val, preds))
+        print(f"{name} metrics:")
+        print(f"  RMSE: {rmse:.4f}")
+        print(f"  MAE: {mae:.4f}")
+        print(f"  R²: {r2:.4f}")
 
-        if acc > best_score:
-            best_score = acc
+        if rmse < best_score or best_score == 0:
+            best_score = rmse
             best_model = grid.best_estimator_
             best_name = name
 
-    os.makedirs("models", exist_ok=True)
-    joblib.dump(best_model, "models/best_model_arrival.pkl")
+    model_dir = os.path.join(SCRIPT_DIR, "..", "models")
+    os.makedirs(model_dir, exist_ok=True)
+    model_path = os.path.join(model_dir, "best_model_arrival.pkl")
+    joblib.dump(best_model, model_path)
 
     print("\nBEST MODEL")
     print(f"Model: {best_name}")
-    print(f"Accuracy: {best_score:.4f}")
-    print("Saved to models/best_model_arrival.pkl")
+    print(f"RMSE: {best_score:.4f}")
+    print(f"Saved to {model_path}")
+    
+    return {
+        "model": best_name,
+        "rmse": round(best_score, 4),
+        "model_path": str(model_path)
+    }
+
+if __name__ == "__main__":
+    train_all_models()

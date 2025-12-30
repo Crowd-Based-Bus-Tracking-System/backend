@@ -1,5 +1,5 @@
 import { parse } from "dotenv";
-import redis from "../config/redis";
+import redis from "../config/redis.js";
 
 export const storeReporterPosition = async (data) => {
     const {
@@ -30,8 +30,20 @@ export const getReporterPosition = async (userId) => {
 export const getReporterPositions = async (userIds = []) => {
     const arr = await Promise.all(
         userIds.map(id => redis.hgetall(`reporter:${id}:pos`))
-    )
-    return userIds.map((id, i) => ({ userId: id, ...arr[i] }));
+    );
+
+    return userIds.map((id, i) => {
+        const pos = arr[i];
+        if (!pos || !pos.lat || !pos.lng) {
+            return null;
+        }
+        return {
+            userId: id,
+            lat: parseFloat(pos.lat),
+            lng: parseFloat(pos.lng),
+            ts: pos.ts ? parseInt(pos.ts) : null
+        };
+    }).filter(p => p !== null);
 }
 
 

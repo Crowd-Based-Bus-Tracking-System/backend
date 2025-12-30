@@ -1,4 +1,4 @@
-import { predictArrival, storeArrivalData, checkMLServiceHealth } from "./index.js";
+import { predictArrival, storeArrivalData, checkMLServiceHealth, trainArrivalModel } from "./index.js";
 import buildFeatures from "./feautreBuilder.service.js";
 
 
@@ -35,3 +35,17 @@ export const storeArrivalForTraining = async (features, probability = null, wasC
         console.error("Error storing arrival data for training:", error.message);
     }
 };
+
+
+export const trainArrivalModelIntergrate = async () => {
+    const isAvailable = await checkMLServiceHealth();
+    if (!isAvailable) {
+        console.warn("ML service unavailable for training");
+        throw new Error("ML service unavailable");
+    }
+
+    const result = await trainArrivalModel();
+    console.log("Model training completed:", result);
+
+    return result;
+}

@@ -1,10 +1,10 @@
-import redis from "../../config/redis";
-import distanceInMeters from "../../utils/geo";
-import { getReporterPositions, getReporterStats } from "../reporter.service";
-import { parseMembersWithScores } from "../../utils/helpers";
-import { mean, median, stddev, msToSec } from "../../utils/math";
+import redis from "../../config/redis.js";
+import distanceInMeters from "../../utils/geo.js";
+import { getReporterPositions, getReporterStats } from "../reporter.service.js";
+import { parseMembersWithScores } from "../../utils/helpers.js";
+import { mean, median, stddev, msToSec } from "../../utils/math.js";
 
-const RADIUS = 100;
+const RADIUS = 20;
 
 const buildFeatures = async (data, reportKey) => {
     const {
@@ -17,8 +17,10 @@ const buildFeatures = async (data, reportKey) => {
     const now = Date.now();
     const members = await redis.zrange(reportKey, 0, -1, "WITHSCORES");
     const reporters = parseMembersWithScores(members);
-    const firstTs = reporters.length ? reporters[0].ts : arrivalTime;
-    const lastTs = reporters.length ? reporters[reporters.length - 1].ts : arrivalTime;
+
+    const arrivalTimeMs = arrivalTime * 1000;
+    const firstTs = reporters.length ? reporters[0].ts * 1000 : arrivalTimeMs;
+    const lastTs = reporters.length ? reporters[reporters.length - 1].ts * 1000 : arrivalTimeMs;
 
     const spanS = (lastTs - firstTs) / 1000;
 
