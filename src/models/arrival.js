@@ -124,3 +124,19 @@ export const getLastArrival = async (busId) => {
         return null;
     }
 };
+
+
+export const calculateSegmentTimeFromArrivals = async (fromStopId, toStopId) => {
+    const result = await pool.query(`
+        SELECT 
+            AVG(EXTRACT(EPOCH FROM (a2.arrived_at - a1.arrived_at))) as avg_seconds
+        FROM arrivals a1
+        JOIN arrivals a2 ON a1.bus_id = a2.bus_id
+        WHERE a1.stop_id = $1 
+            AND a2.stop_id = $2
+            AND a2.arrived_at > a1.arrived_at
+            AND EXTRACT(EPOCH FROM (a2.arrived_at - a1.arrived_at)) BETWEEN 0 AND 7200
+    `, [fromStopId, toStopId]);
+
+    return result.rows[0]?.avg_seconds ? Math.round(result.rows[0].avg_seconds) : null;
+};
