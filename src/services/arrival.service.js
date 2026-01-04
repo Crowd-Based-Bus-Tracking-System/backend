@@ -2,6 +2,11 @@ import redis from "../config/redis.js";
 import { checkDistance } from "../utils/check-distance.js";
 import { storeReporterPosition, increaseReporterStatsOnReport, increaseReporterStatsOnConfirm } from "./reporter.service.js";
 import { validateArrivalWithML, storeArrivalForTraining } from "./ml-arrival-confirmation/mlIntegration.service.js";
+import { storeArrival, updateSegmentTime, getLastArrival } from "../models/arrival.js";
+import { getBusById } from "../models/bus.js";
+import { getWeatherImpact } from "./weather.service.js";
+
+
 
 
 export const reportArrival = async (data) => {
@@ -79,12 +84,47 @@ export const reportArrival = async (data) => {
                 await storeArrivalForTraining(mlResult.features, mlResult.probability);
             }
 
+            try {
+                const weatherImpact = await getWeatherImpact(user.lat, user.lng);
+
+                const arrivalRecord = await storeArrival({
+                    busId,
+                    stopId,
+                    scheduledTime: null, // gngfnfg
+                    delaySeconds: null, // nfnfn
+                    weather: weatherImpact.factors.weather_main,
+                    trafficLevel: data.trafficLevel || null,
+                    eventNearby: data.eventNearby || false,
+                    arrivedAt: arrivalTime
+                });
+
+                console.log(`Arrival stored to database with ID: ${arrivalRecord.id}`);
+
+                const lastArrival = await getLastArrival(busId);
+                if (lastArrival && lastArrival.stop_id !== stopId) {
+                    const travelTime = Math.floor((arrivalTime - new Date(lastArrival.arrived_at).getTime()) / 1000);
+
+                    const bus = await getBusById(busId);
+                    if (bus && bus.route_id && travelTime > 0 && travelTime < 7200) {
+                        await updateSegmentTime({
+                            routeId: bus.route_id,
+                            fromStopId: lastArrival.stop_id,
+                            toStopId: stopId,
+                            travelSeconds: travelTime
+                        });
+                    }
+                }
+            } catch (dbError) {
+                console.error("Error storing arrival to database:", dbError.message);
+            }
+
             return {
                 confirmed: true,
                 message: `Arrival confirmed at ${arrivalTime}`,
                 mlProbability: mlResult.probability,
                 reportCount: reportCount
             }
+
         }
 
         if (mlResult.features && mlResult.probability !== null) {
