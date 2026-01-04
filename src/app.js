@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 dotenv.config();
 
-import arrivalRouter from "./routes/arrival.route.js"; 
+import arrivalRouter from "./routes/arrival.route.js";
 import mlIntegrationRouter from "./routes/mlIntegration.route.js";
 
 const express = (await import("express")).default;

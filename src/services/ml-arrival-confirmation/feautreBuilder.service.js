@@ -3,8 +3,21 @@ import distanceInMeters from "../../utils/geo.js";
 import { getReporterPositions, getReporterStats } from "../reporter.service.js";
 import { parseMembersWithScores } from "../../utils/helpers.js";
 import { mean, median, stddev, msToSec } from "../../utils/math.js";
+import { getWeatherImpact, encodeWeatherCondition } from "../weather.service.js";
+
 
 const RADIUS = 20;
+
+const encodeTrafficLevel = (trafficLevel) => {
+    const level = trafficLevel?.toLowerCase();
+    switch (level) {
+        case 'low': return 1;
+        case 'medium': return 2;
+        case 'high': return 3;
+        case 'severe': return 4;
+        default: return 0; 
+    }
+};
 
 const buildFeatures = async (data, reportKey) => {
     const {
@@ -88,6 +101,10 @@ const buildFeatures = async (data, reportKey) => {
     const isEvening = (hourOfDay >= 17 && hourOfDay < 21) ? 1 : 0;
     const isNight = (hourOfDay >= 21 || hourOfDay < 5) ? 1 : 0;
 
+    const weatherImpact = await getWeatherImpact(user.lat, user.lng);
+    const weatherEncoded = encodeWeatherCondition(weatherImpact.factors.weather_main);
+
+
     const features = {
         bus_id: busId,
         stop_id: stopId,
@@ -115,9 +132,23 @@ const buildFeatures = async (data, reportKey) => {
         is_mid_day: isMidDay,
         is_evening: isEvening,
         is_night: isNight,
+
+        rain_1h: weatherImpact.factors.rain_1h,
+        snow_1h: weatherImpact.factors.snow_1h,
+        temperature: weatherImpact.factors.temperature,
+        wind_speed: weatherImpact.factors.wind_speed,
+        humidity: weatherImpact.factors.humidity,
+        visibility: weatherImpact.factors.visibility,
+        weather_delay_multiplier: weatherImpact.delayMultiplier,
+
+        ...weatherEncoded,
+
+        traffic_level: data.trafficLevel ? encodeTrafficLevel(data.trafficLevel) : 0,
+        event_nearby: data.eventNearby ? 1 : 0,
     };
 
     return features;
 }
+
 
 export default buildFeatures;

@@ -15,7 +15,7 @@ def predict(data: ArrivalFeatures):
     prob = predict_arrival(data.features)
     return {
         "confirm_probability": prob,
-        "confirm": prob >=0.8
+        "confirm": prob >=0.6
     }
 
 @app.post("/store-arrival")

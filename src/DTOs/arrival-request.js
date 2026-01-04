@@ -9,5 +9,7 @@ export const ArrivalReportRequestSchema = z.object({
         id: z.string().min(1),
         lat: z.number(),
         lng: z.number()
-    })
+    }),
+    trafficLevel: z.enum(['Low', 'Medium', 'High', 'Severe']).optional(),
+    eventNearby: z.boolean().optional()
 });
