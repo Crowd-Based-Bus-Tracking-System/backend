@@ -186,3 +186,60 @@ export const getDelayTrend = async (busId) => {
         `, [busId]);
     return result;
 }
+
+export const getDelaySByHourandDOW = async (stopId, hour, dayOfWeek) =>{
+    try {
+        const result = await pool.query(`
+            SELECT delay_seconds
+            FROM arrivals
+            WHERE stop_id = $1
+              AND EXTRACT(HOUR FROM arrived_at) = $2
+              AND EXTRACT(DOW FROM arrived_at) = $3
+              AND arrived_at > NOW() - INTERVAL '30 days'
+            ORDER BY arrived_at DESC
+            LIMIT 100
+        `, [stopId, hour, dayOfWeek]);
+
+        return result;
+    } catch (error) {
+        console.error("Error getting average delay by hour and day of week:", error);
+        return 0;
+    }
+}
+
+export const getRecent24hArrivals = async (busId) => {
+    const result = await pool.query(`
+        SELECT 
+            COUNT(*) FILTER (WHERE ABS(delay_seconds) < 300) as on_time_count,
+            COUNT(*) as total_count
+        FROM arrivals
+        WHERE bus_id = $1
+            AND arrived_at > NOW() - INTERVAL '24 hours'
+    `, [busId]);
+
+    return result;
+}
+
+export const getRecent7dArrivals = async (busId) => {
+    const result = await pool.query(`
+        SELECT 
+            COUNT(*) FILTER (WHERE ABS(delay_seconds) < 300) as on_time_count,
+            COUNT(*) as total_count
+        FROM arrivals
+        WHERE bus_id = $1
+          AND arrived_at > NOW() - INTERVAL '7 days'
+    `, [busId]);
+
+    return result;
+}
+
+export const getStopDelays = async (stopId) => {
+    const result = await pool.query(`
+        SELECT AVG(delay_seconds) as avg_delay
+            FROM arrivals
+            WHERE stop_id = $1
+              AND arrived_at > NOW() - INTERVAL '30 days'
+        `, [stopId]);
+
+    return result;
+}

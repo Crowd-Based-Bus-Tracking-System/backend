@@ -6,7 +6,7 @@ import { getScheduleForStop } from "../../models/shedule.js";
 import { getRouteStops } from "../../models/route.js";
 import { mean, median, stddev } from "../../utils/math.js";
 import { getWeatherImpact, encodeWeatherCondition } from "../weather.service.js";
-import { getAverageDelayByHour, getAverageDelayToday, getDelayTrend } from "../../models/arrival.js";
+import { getAverageDelayByHour, getAverageDelayToday, getDelaySByHourandDOW, getDelayTrend, getRecent7dArrivals, getStopDelays } from "../../models/arrival.js";
 
 const busProgressionService = new BusProgressionService();
 const baseEtaService = new BaseEtaService();
@@ -215,16 +215,7 @@ async function getHistoricalPerformance(busId, stopId, now) {
     };
 
     try {
-        const result = await pool.query(`
-            SELECT delay_seconds
-            FROM arrivals
-            WHERE stop_id = $1
-              AND EXTRACT(HOUR FROM arrived_at) = $2
-              AND EXTRACT(DOW FROM arrived_at) = $3
-              AND arrived_at > NOW() - INTERVAL '30 days'
-            ORDER BY arrived_at DESC
-            LIMIT 100
-        `, [stopId, hour, dayOfWeek]);
+        const result = await getDelaySByHourandDOW(stopId, hour, dayOfWeek);
 
         if (result.rows.length > 0) {
             const delays = result.rows.map(r => r.delay_seconds || 0).sort((a, b) => a - b);
@@ -236,39 +227,20 @@ async function getHistoricalPerformance(busId, stopId, now) {
             features.historical_sample_count = delays.length;
         }
 
-        const recent24h = await pool.query(`
-            SELECT 
-                COUNT(*) FILTER (WHERE ABS(delay_seconds) < 300) as on_time_count,
-                COUNT(*) as total_count
-            FROM arrivals
-            WHERE bus_id = $1
-              AND arrived_at > NOW() - INTERVAL '24 hours'
-        `, [busId]);
+        const recent24h = await getRecent24hArrivals(busId);
 
         if (recent24h.rows[0]?.total_count > 0) {
             features.recent_24h_performance = recent24h.rows[0].on_time_count / recent24h.rows[0].total_count;
         }
 
-        const recent7d = await pool.query(`
-            SELECT 
-                COUNT(*) FILTER (WHERE ABS(delay_seconds) < 300) as on_time_count,
-                COUNT(*) as total_count
-            FROM arrivals
-            WHERE bus_id = $1
-              AND arrived_at > NOW() - INTERVAL '7 days'
-        `, [busId]);
+        const recent7d = await getRecent7dArrivals(busId);
 
         if (recent7d.rows[0]?.total_count > 0) {
             features.recent_7d_performance = recent7d.rows[0].on_time_count / recent7d.rows[0].total_count;
             features.route_punctuality_score = features.recent_7d_performance;
         }
 
-        const stopDelay = await pool.query(`
-            SELECT AVG(delay_seconds) as avg_delay
-            FROM arrivals
-            WHERE stop_id = $1
-              AND arrived_at > NOW() - INTERVAL '30 days'
-        `, [stopId]);
+        const stopDelay = await getStopDelays(stopId);
 
         if (stopDelay.rows[0]?.avg_delay !== null) {
             features.typical_delay_this_stop = stopDelay.rows[0].avg_delay;
@@ -288,8 +260,7 @@ function calculateRouteFeatures(remainingStops, lastCheckpoint) {
     return {
         stops_remaining: totalStops,
         pct_route_completed: lastCheckpoint ? 0.5 : 0,
-        distance_remaining_km: totalStops * 0.5,
-        avg_stops_per_segment: totalStops > 0 ? 1 : 0
+        distance_remaining_km: totalStops * 0.5
     };
 }
 
@@ -305,17 +276,30 @@ async function getReporterFeatures(targetStopId) {
     };
 
     try {
-
         const reportKey = `stop:${targetStopId}:watchers`;
         const watchers = await redis.zcard(reportKey);
         features.reporters_at_target_stop = watchers || 0;
 
-
         if (watchers > 0) {
-            features.avg_reporter_accuracy_target = 0.7;
-            features.has_high_quality_reporter = 1;
-        }
+            const watcherIds = await redis.zrange(reportKey, 0, -1);
 
+            const { getReporterStats } = await import('../reporter.service.js');
+            const reporterStats = await Promise.all(
+                watcherIds.map(id => getReporterStats(id))
+            );
+
+            const accuracies = reporterStats
+                .map(stats => parseFloat(stats?.accuracy || 0))
+                .filter(acc => acc > 0);
+
+            if (accuracies.length > 0) {
+                features.avg_reporter_accuracy_target =
+                    accuracies.length > 0
+                        ? accuracies.reduce((a, b) => a + b, 0) / accuracies.length
+                        : 0;
+                features.has_high_quality_reporter = accuracies.some(acc => acc > 0.9) ? 1 : 0;
+            }
+        }
     } catch (error) {
         console.error("Error fetching reporter features:", error);
     }
