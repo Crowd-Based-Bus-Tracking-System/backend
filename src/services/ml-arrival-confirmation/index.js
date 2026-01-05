@@ -4,9 +4,7 @@ const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
 
 export const predictArrival = async (features) => {
     try {
-        const response = await axios.post(`${ML_SERVICE_URL}/predict-arrival`, {
-            features: features
-        });
+        const response = await axios.post(`${ML_SERVICE_URL}/predict-arrival`, features);
         return response.data;
     } catch (error) {
         console.error("Error predicting arrival:", error.message);
@@ -18,7 +16,7 @@ export const predictArrival = async (features) => {
 export const storeArrivalData = async (features, label) => {
     try {
         const response = await axios.post(`${ML_SERVICE_URL}/store-arrival`, {
-            features: features,
+            ...features,
             label: label
         });
         return response.data;
