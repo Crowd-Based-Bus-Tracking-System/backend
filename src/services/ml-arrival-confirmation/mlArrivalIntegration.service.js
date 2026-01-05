@@ -1,5 +1,5 @@
 import { predictArrival, storeArrivalData, checkMLServiceHealth, trainArrivalModel } from "./index.js";
-import buildFeatures from "./feautreBuilder.service.js";
+import buildFeatures from "./arrivalFeautreBuilder.service.js";
 
 
 export const validateArrivalWithML = async (data, reportKey) => {

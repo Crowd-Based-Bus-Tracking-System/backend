@@ -1,13 +1,14 @@
 import redis from "../config/redis.js";
 import { checkDistance } from "../utils/check-distance.js";
 import { storeReporterPosition, increaseReporterStatsOnReport, increaseReporterStatsOnConfirm } from "./reporter.service.js";
-import { validateArrivalWithML, storeArrivalForTraining } from "./ml-arrival-confirmation/mlIntegration.service.js";
+import { validateArrivalWithML, storeArrivalForTraining } from "./ml-arrival-confirmation/mlArrivalIntegration.service.js";
 import { storeArrival, updateSegmentTime, getLastArrival } from "../models/arrival.js";
 import { getBusById } from "../models/bus.js";
 import { getWeatherImpact } from "./weather.service.js";
+import { getScheduleForStop } from "../models/shedule.js";
+import BaseEtaService from "./eta.service.js";
 
-
-
+const baseEtaService = new BaseEtaService();
 
 export const reportArrival = async (data) => {
     const {
@@ -86,12 +87,15 @@ export const reportArrival = async (data) => {
 
             try {
                 const weatherImpact = await getWeatherImpact(user.lat, user.lng);
+                const stopSchedule = await getScheduleForStop(busId, stopId);
+                const stopScheduleTime = baseEtaService.getScheduledTime(stopSchedule);
+                const delayS = arrivalTime - stopScheduleTime;
 
                 const arrivalRecord = await storeArrival({
                     busId,
                     stopId,
-                    scheduledTime: null, // gngfnfg
-                    delaySeconds: null, // nfnfn
+                    scheduledTime: stopScheduleTime,
+                    delaySeconds: delayS,
                     weather: weatherImpact.factors.weather_main,
                     trafficLevel: data.trafficLevel || null,
                     eventNearby: data.eventNearby || false,

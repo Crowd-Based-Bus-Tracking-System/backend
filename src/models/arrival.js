@@ -140,3 +140,49 @@ export const calculateSegmentTimeFromArrivals = async (fromStopId, toStopId) => 
 
     return result.rows[0]?.avg_seconds ? Math.round(result.rows[0].avg_seconds) : null;
 };
+
+
+export const getAverageDelayToday = async (busId) => {
+    try {
+        const result = await pool.query(`
+            SELECT AVG(delay_seconds) as avg_delay
+            FROM arrivals
+            WHERE bus_id = $1
+              AND arrived_at::date = CURRENT_DATE
+        `, [busId]);
+
+        return result.rows[0]?.avg_delay || 0;
+    } catch (error) {
+        console.error("Error getting average delay today:", error);
+        return 0;
+    }
+}
+
+
+export const getAverageDelayByHour = async (stopId, hour) => {
+    try {
+        const result = await pool.query(`
+            SELECT AVG(delay_seconds) as avg_delay
+            FROM arrivals
+            WHERE stop_id = $1
+              AND EXTRACT(HOUR FROM arrived_at) = $2
+              AND arrived_at > NOW() - INTERVAL '30 days'
+        `, [stopId, hour]);
+
+        return result.rows[0]?.avg_delay || 0;
+    } catch (error) {
+        console.error("Error getting average delay by hour:", error);
+        return 0;
+    }
+}
+
+export const getDelayTrend = async (busId) => {
+    const result = await pool.query(`
+            SELECT delay_seconds, stop_id
+            FROM arrivals
+            WHERE bus_id = $1
+            ORDER BY arrived_at DESC
+            LIMIT 3
+        `, [busId]);
+    return result;
+}
