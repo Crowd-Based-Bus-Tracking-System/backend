@@ -9,8 +9,8 @@ from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.svm import SVR
 import joblib
 import os
-
-
+from pydantic import ValidationError
+from schemas.arrival_features import ArrivalFeatures
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_PATH = os.path.join(SCRIPT_DIR, "..", "data", "arrivals", "arrivals.csv")
@@ -18,34 +18,29 @@ DATA_PATH = os.path.join(SCRIPT_DIR, "..", "data", "arrivals", "arrivals.csv")
 def train_all_models(data_path=DATA_PATH):
     df = pd.read_csv(data_path)
 
+    validated_data = []
+    validation_errors = 0
+    
+    for idx, row in df.iterrows():
+        try:
+            arrival_features = ArrivalFeatures(**row.to_dict())
+            validated_data.append(arrival_features.dict())
+        except ValidationError as e:
+            validation_errors += 1
+            if validation_errors <= 5:
+                print(f"Validation error for row {idx}: {e}")
+    
+    if validation_errors > 0:
+        print(f"\nTotal validation errors: {validation_errors}/{len(df)}")
+    
+    df = pd.DataFrame(validated_data)
+    
     FEATURE_COLUMNS = [
-        "bus_id",
-        "stop_id",
-        "arrival_time",
-        "report_count",
-        "unique_reporters",
-        "reports_per_minute",
-        "time_since_last_report_s",
-        "time_since_first_report_s",
-        "distance_mean",
-        "distance_median",
-        "distance_std",
-        "pct_within_radius",
-        "acc_mean",
-        "weighted_dist_mean",
-        "prev_arrival_time",
-        "time_since_last_arrival_s",
-        "t_mean",
-        "t_std",
-        "hour_of_day",
-        "day_of_week",
-        "is_weekend",
-        "is_rush_hour",
-        "is_early_morning",
-        "is_mid_day",
-        "is_evening",
-        "is_night",
+        field for field in ArrivalFeatures.__fields__
+        if field not in ["bus_id", "stop_id", "arrival_time"]
     ]
+    
+    print(f"\nUsing {len(FEATURE_COLUMNS)} features from Pydantic schema")
 
     X = df[FEATURE_COLUMNS]
     y = df["confirm_prob"]
