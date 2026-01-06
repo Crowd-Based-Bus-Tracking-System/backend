@@ -9,46 +9,48 @@ from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.svm import SVR
 import joblib
 import os
-
-
+from pydantic import ValidationError
+from schemas.arrival_features import ArrivalFeatures
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_PATH = os.path.join(SCRIPT_DIR, "..", "data", "arrivals", "arrivals.csv")
 
-def train_all_models(data_path=DATA_PATH):
+def train_arrival_models(data_path=DATA_PATH):
+    print(f"\nLoading data from: {data_path}")
     df = pd.read_csv(data_path)
 
+    print("\nValidating features with Pydantic schema...")
+    validated_data = []
+    validation_errors = 0
+    
+    for idx, row in df.iterrows():
+        try:
+            arrival_features = ArrivalFeatures(**row.to_dict())
+            validated_data.append(arrival_features.dict())
+        except ValidationError as e:
+            validation_errors += 1
+            if validation_errors <= 5:
+                print(f"Validation error for row {idx}: {e}")
+    
+    if validation_errors > 0:
+        print(f"\nTotal validation errors: {validation_errors}/{len(df)}")
+        print(f"Valid rows: {len(validated_data)}")
+    else:
+        print(f"All {len(validated_data)} rows validated successfully")
+    
+    df = pd.DataFrame(validated_data)
+    
     FEATURE_COLUMNS = [
-        "bus_id",
-        "stop_id",
-        "arrival_time",
-        "report_count",
-        "unique_reporters",
-        "reports_per_minute",
-        "time_since_last_report_s",
-        "time_since_first_report_s",
-        "distance_mean",
-        "distance_median",
-        "distance_std",
-        "pct_within_radius",
-        "acc_mean",
-        "weighted_dist_mean",
-        "prev_arrival_time",
-        "time_since_last_arrival_s",
-        "t_mean",
-        "t_std",
-        "hour_of_day",
-        "day_of_week",
-        "is_weekend",
-        "is_rush_hour",
-        "is_early_morning",
-        "is_mid_day",
-        "is_evening",
-        "is_night",
+        field for field in ArrivalFeatures.__fields__
+        if field not in ["bus_id", "stop_id", "arrival_time"]
     ]
+    
+    print(f"\nUsing {len(FEATURE_COLUMNS)} features from Pydantic schema")
+
+    TARGET_COLUMN = "confirm_prob"
 
     X = df[FEATURE_COLUMNS]
-    y = df["confirm_prob"]
+    y = df[TARGET_COLUMN]
 
     X_train, X_val, y_train, y_val = train_test_split(
         X, y, test_size=0.2, random_state=42
@@ -139,7 +141,10 @@ def train_all_models(data_path=DATA_PATH):
     model_dir = os.path.join(SCRIPT_DIR, "..", "models")
     os.makedirs(model_dir, exist_ok=True)
     model_path = os.path.join(model_dir, "best_model_arrival.pkl")
+    feature_order_path = os.path.join(model_dir, "arrival_feature_order.pkl")
+
     joblib.dump(best_model, model_path)
+    joblib.dump(FEATURE_COLUMNS, feature_order_path)
 
     print("\nBEST MODEL")
     print(f"Model: {best_name}")

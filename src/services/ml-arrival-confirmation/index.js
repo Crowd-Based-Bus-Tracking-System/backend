@@ -4,27 +4,11 @@ const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
 
 export const predictArrival = async (features) => {
     try {
-        const response = await axios.post(`${ML_SERVICE_URL}/predict-arrival`, {
-            features: features
-        });
+        const response = await axios.post(`${ML_SERVICE_URL}/predict-arrival`, features);
         return response.data;
     } catch (error) {
         console.error("Error predicting arrival:", error.message);
         throw new Error(`Failed to predict arrival: ${error.message}`);
-    }
-};
-
-
-export const storeArrivalData = async (features, label) => {
-    try {
-        const response = await axios.post(`${ML_SERVICE_URL}/store-arrival`, {
-            features: features,
-            label: label
-        });
-        return response.data;
-    } catch (error) {
-        console.error("Error storing arrival data:", error.message);
-        throw new Error(`Failed to store arrival data: ${error.message}`);
     }
 };
 
@@ -36,6 +20,20 @@ export const trainArrivalModel = async () => {
     } catch (error) {
         console.error("Error training model:", error.message);
         throw new Error(`Failed to train model: ${error.message}`);
+    }
+};
+
+
+export const storeArrivalData = async (features, label) => {
+    try {
+        const response = await axios.post(`${ML_SERVICE_URL}/store-arrival`, {
+            ...features,
+            label: label
+        });
+        return response.data;
+    } catch (error) {
+        console.error("Error storing arrival data:", error.message);
+        throw new Error(`Failed to store arrival data: ${error.message}`);
     }
 };
 

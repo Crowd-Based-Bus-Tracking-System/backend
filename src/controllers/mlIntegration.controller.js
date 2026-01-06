@@ -1,4 +1,4 @@
-import { trainArrivalModelIntergrate } from "../services/ml-arrival-confirmation/mlIntegration.service.js";
+import { trainArrivalModelIntergrate } from "../services/ml-arrival-confirmation/mlArrivalIntegration.service.js";
 
 export const trainArrivalModelController = async (req, res) => {
     try {
