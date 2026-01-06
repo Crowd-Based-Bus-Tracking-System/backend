@@ -13,6 +13,17 @@ export const predictArrival = async (features) => {
 };
 
 
+export const trainArrivalModel = async () => {
+    try {
+        const response = await axios.post(`${ML_SERVICE_URL}/train-arrival`);
+        return response.data;
+    } catch (error) {
+        console.error("Error training model:", error.message);
+        throw new Error(`Failed to train model: ${error.message}`);
+    }
+};
+
+
 export const storeArrivalData = async (features, label) => {
     try {
         const response = await axios.post(`${ML_SERVICE_URL}/store-arrival`, {
@@ -23,17 +34,6 @@ export const storeArrivalData = async (features, label) => {
     } catch (error) {
         console.error("Error storing arrival data:", error.message);
         throw new Error(`Failed to store arrival data: ${error.message}`);
-    }
-};
-
-
-export const trainArrivalModel = async () => {
-    try {
-        const response = await axios.post(`${ML_SERVICE_URL}/train-arrival`);
-        return response.data;
-    } catch (error) {
-        console.error("Error training model:", error.message);
-        throw new Error(`Failed to train model: ${error.message}`);
     }
 };
 

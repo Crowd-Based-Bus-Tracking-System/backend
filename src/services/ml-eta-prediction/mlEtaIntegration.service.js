@@ -1,21 +1,17 @@
+import { predictETA, storeETAData, checkMLServiceHealth, trainETAModel } from "./index.js";
 import buildETAFeatures from "./etaFeatureBuilder.service.js";
-import axios from "axios";
 
-const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
 
-/**
- * Predict ETA using ML model
- * @param {Object} params
- * @param {number} params.busId
- * @param {number} params.targetStopId
- * @param {Object} params.location - {lat, lng}
- * @returns {Object} Prediction result
- */
 export const predictETAWithML = async ({ busId, targetStopId, location }) => {
     try {
+        const isAvailable = await checkMLServiceHealth();
+        if (!isAvailable) {
+            console.warn("ML service unavailable, skipping ML ETA prediction");
+            return { mlPrediction: null, confidence: 0, features: null };
+        }
+
         const requestTime = Date.now();
 
-        // Build features
         const features = await buildETAFeatures({
             busId,
             targetStopId,
@@ -25,27 +21,21 @@ export const predictETAWithML = async ({ busId, targetStopId, location }) => {
 
         console.log(`Built ${Object.keys(features).length} features for ETA prediction`);
 
-        // Call ML service
-        const response = await axios.post(`${ML_SERVICE_URL}/predict-eta`, features, {
-            timeout: 5000
-        });
+        const prediction = await predictETA(features);
 
         return {
-            mlPrediction: response.data.eta_seconds,
-            confidence: response.data.confidence,
-            uncertaintyRange: response.data.uncertainty_range,
+            mlPrediction: prediction.eta_seconds,
+            confidence: prediction.confidence,
+            etaMinutes: prediction.eta_minutes,
             features: features,
             method: "ml_prediction"
         };
 
     } catch (error) {
-        console.error("Error predicting ETA with ML:", error.message);
-
-        // Return null on error (fallback to baseline methods)
+        console.error("Error in ML ETA prediction:", error.message);
         return {
             mlPrediction: null,
             confidence: 0,
-            uncertaintyRange: null,
             features: null,
             method: "ml_error",
             error: error.message
@@ -53,41 +43,43 @@ export const predictETAWithML = async ({ busId, targetStopId, location }) => {
     }
 };
 
-/**
- * Store ETA prediction for training/evaluation
- * @param {Object} predictionData
- */
-export const storePredictionForTraining = async (predictionData) => {
+
+export const trainETAModelIntegrate = async () => {
+    const isAvailable = await checkMLServiceHealth();
+    if (!isAvailable) {
+        console.warn("ML service unavailable for training");
+        throw new Error("ML service unavailable");
+    }
+
+    const result = await trainETAModel();
+    console.log("ETA model training completed:", result);
+
+    return result;
+};
+
+
+export const storePredictionForTraining = async (features, actualETA = null) => {
     try {
-        const response = await axios.post(
-            `${ML_SERVICE_URL}/store-eta-prediction`,
-            predictionData,
-            { timeout: 3000 }
-        );
+        const data = {
+            ...features,
+            actual_eta_seconds: actualETA
+        };
 
-        console.log("ETA prediction stored for training");
-        return response.data;
-
+        await storeETAData(data);
+        console.log(`ETA prediction stored for training${actualETA ? ` with actual ETA: ${actualETA}s` : ''}`);
     } catch (error) {
-        console.error("Error storing prediction:", error.message);
-        return null;
+        console.error("Error storing ETA prediction for training:", error.message);
     }
 };
 
-/**
- * Log prediction accuracy when bus actually arrives
- * @param {number} busId
- * @param {number} stopId
- * @param {number} actualArrivalTime
- * @param {Object} prediction - Original prediction object
- */
+
 export const logPredictionAccuracy = async (busId, stopId, actualArrivalTime, prediction) => {
     if (!prediction || !prediction.features) {
         return;
     }
 
     const predictionMadeAt = prediction.features.prediction_made_at;
-    const actualETA = (actualArrivalTime - predictionMadeAt) / 1000; // seconds
+    const actualETA = (actualArrivalTime - predictionMadeAt) / 1000;
     const predictedETA = prediction.mlPrediction;
     const error = actualETA - predictedETA;
     const absError = Math.abs(error);
@@ -105,8 +97,8 @@ export const logPredictionAccuracy = async (busId, stopId, actualArrivalTime, pr
 
     console.log(`ETA Prediction accuracy logged: Predicted=${predictedETA}s, Actual=${actualETA}s, Error=${error}s`);
 
-    // Flag anomalous predictions (>5 min error)
     if (absError > 300) {
         console.warn(`⚠️ Large ETA prediction error: ${absError}s for bus ${busId} at stop ${stopId}`);
     }
 };
+

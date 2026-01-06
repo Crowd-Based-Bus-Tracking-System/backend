@@ -26,17 +26,6 @@ export const validateArrivalWithML = async (data, reportKey) => {
 };
 
 
-export const storeArrivalForTraining = async (features, probability = null, wasConfirmed = false) => {
-    try {
-        const label = probability !== null ? probability : (wasConfirmed ? 1 : 0);
-        await storeArrivalData(features, label);
-        console.log(`Arrival data stored for training with label: ${label}`);
-    } catch (error) {
-        console.error("Error storing arrival data for training:", error.message);
-    }
-};
-
-
 export const trainArrivalModelIntergrate = async () => {
     const isAvailable = await checkMLServiceHealth();
     if (!isAvailable) {
@@ -49,3 +38,14 @@ export const trainArrivalModelIntergrate = async () => {
 
     return result;
 }
+
+
+export const storeArrivalForTraining = async (features, probability = null, wasConfirmed = false) => {
+    try {
+        const label = probability !== null ? probability : (wasConfirmed ? 1 : 0);
+        await storeArrivalData(features, label);
+        console.log(`Arrival data stored for training with label: ${label}`);
+    } catch (error) {
+        console.error("Error storing arrival data for training:", error.message);
+    }
+};

@@ -15,9 +15,11 @@ from schemas.arrival_features import ArrivalFeatures
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_PATH = os.path.join(SCRIPT_DIR, "..", "data", "arrivals", "arrivals.csv")
 
-def train_all_models(data_path=DATA_PATH):
+def train_arrival_models(data_path=DATA_PATH):
+    print(f"\nLoading data from: {data_path}")
     df = pd.read_csv(data_path)
 
+    print("\nValidating features with Pydantic schema...")
     validated_data = []
     validation_errors = 0
     
@@ -32,6 +34,9 @@ def train_all_models(data_path=DATA_PATH):
     
     if validation_errors > 0:
         print(f"\nTotal validation errors: {validation_errors}/{len(df)}")
+        print(f"Valid rows: {len(validated_data)}")
+    else:
+        print(f"All {len(validated_data)} rows validated successfully")
     
     df = pd.DataFrame(validated_data)
     
@@ -42,8 +47,10 @@ def train_all_models(data_path=DATA_PATH):
     
     print(f"\nUsing {len(FEATURE_COLUMNS)} features from Pydantic schema")
 
+    TARGET_COLUMN = "confirm_prob"
+
     X = df[FEATURE_COLUMNS]
-    y = df["confirm_prob"]
+    y = df[TARGET_COLUMN]
 
     X_train, X_val, y_train, y_val = train_test_split(
         X, y, test_size=0.2, random_state=42
@@ -134,7 +141,10 @@ def train_all_models(data_path=DATA_PATH):
     model_dir = os.path.join(SCRIPT_DIR, "..", "models")
     os.makedirs(model_dir, exist_ok=True)
     model_path = os.path.join(model_dir, "best_model_arrival.pkl")
+    feature_order_path = os.path.join(model_dir, "arrival_feature_order.pkl")
+
     joblib.dump(best_model, model_path)
+    joblib.dump(FEATURE_COLUMNS, feature_order_path)
 
     print("\nBEST MODEL")
     print(f"Model: {best_name}")
