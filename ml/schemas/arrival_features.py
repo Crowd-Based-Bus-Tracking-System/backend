@@ -51,7 +51,6 @@ class ArrivalFeatures(BaseModel):
     weather_thunderstorm: int = Field(ge=0, le=1, default=0, description="1 if thunderstorm")
     weather_unknown: int = Field(ge=0, le=1, default=0, description="1 if weather unknown")
     
-    # Traffic & Events (2 features)
     traffic_level: int = Field(ge=0, le=4, default=0, description="0=unknown, 1=low, 2=medium, 3=high, 4=severe")
     event_nearby: int = Field(ge=0, le=1, default=0, description="1 if special event nearby")
     
