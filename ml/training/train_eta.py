@@ -30,7 +30,7 @@ def train_eta_models(data_path=DATA_PATH):
         except ValidationError as e:
             validation_errors += 1
             if validation_errors <= 5:
-                print(f"Row {idx}: {e}")
+                print(f"  ⚠️ Row {idx}: {e}")
     
     if validation_errors > 0:
         print(f"\nTotal validation errors: {validation_errors}/{len(df)}")
