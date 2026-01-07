@@ -172,37 +172,39 @@ class ETAFusionEngine {
             mlETA
         );
 
+        // Perform weighted fusion of all available predictions
         let finalETA = 0;
-        const methods = [];
+        const methodsUsed = [];
 
-        if (historicalETA.eta_seconds !== 0 && weights.historical > 0) {
+        if (historicalETA.eta_seconds !== null && weights.historical > 0) {
             finalETA += historicalETA.eta_seconds * weights.historical;
-            methods.push({
-                method: "historical",
+            methodsUsed.push({
+                method: 'historical',
                 eta: historicalETA.eta_seconds,
                 weight: weights.historical
-            })
+            });
         }
 
-        if (scheduleBasedETA.eta_seconds !== 0 && weights.schedule > 0) {
+        if (scheduleBasedETA.eta_seconds !== null && weights.schedule > 0) {
             finalETA += scheduleBasedETA.eta_seconds * weights.schedule;
-            methods.push({
-                method: "schedule",
+            methodsUsed.push({
+                method: 'schedule',
                 eta: scheduleBasedETA.eta_seconds,
                 weight: weights.schedule
-            })
+            });
         }
 
-        if (mlETA.mlPrediction && mlETA.confidence !== undefined && weights.ml > 0) {
+        if (mlETA?.mlPrediction !== null && weights.ml > 0) {
             finalETA += mlETA.mlPrediction * weights.ml;
-            methods.push({
-                method: "ml",
+            methodsUsed.push({
+                method: 'ml',
                 eta: mlETA.mlPrediction,
                 weight: weights.ml,
                 ml_confidence: mlETA.confidence
-            })
+            });
         }
 
+        // Calculate overall confidence based on weighted contributors
         const confidence = this.calculateOverallConfidence(weights, mlETA, lastConfirmedStop);
         const uncertaintyRange = this.estimateUncertainty(finalETA, confidence);
 
@@ -212,42 +214,112 @@ class ETAFusionEngine {
             arrival_time: new Date(Date.now() + finalETA * 1000),
             confidence: confidence,
             freshness_minutes: lastConfirmedStop?.minutesSinceArrival || null,
-            last_confirmed_stop: lastConfirmedStop?.stopId || null,
-            methods_used: methods,
+            last_checkpoint_stop: lastConfirmedStop?.stopId || null,
+            methods_used: methodsUsed,
             weights: weights,
-            uncertainty_range: uncertaintyRange,
-            
+            uncertainty_range: uncertaintyRange
+        };
+    }
+
+    /**
+     * Calculate overall confidence based on weight distribution and data quality
+     */
+    calculateOverallConfidence(weights, mlETA, lastConfirmedStop) {
+        let confidence = 0;
+
+        // ML contribution to confidence
+        if (mlETA?.confidence && weights.ml > 0) {
+            confidence += mlETA.confidence * weights.ml;
+        }
+
+        // Historical contribution (moderate confidence)
+        if (weights.historical > 0) {
+            const historicalConfidence = lastConfirmedStop
+                ? Math.max(0.3, 0.8 - (lastConfirmedStop.minutesSinceArrival / 30))
+                : 0.3;
+            confidence += historicalConfidence * weights.historical;
+        }
+
+        // Schedule contribution (baseline confidence)
+        if (weights.schedule > 0) {
+            confidence += 0.4 * weights.schedule; // Schedule has moderate baseline confidence
+        }
+
+        return Math.max(0.1, Math.min(0.95, confidence));
+    }
+
+    /**
+     * Estimate uncertainty range based on ETA and confidence
+     */
+    estimateUncertainty(eta_seconds, confidence) {
+        // Base uncertainty percentage
+        let uncertainty_pct = eta_seconds > 600 ? 0.3 : 0.2;
+
+        // Reduce uncertainty for high confidence
+        if (confidence > 0.7) {
+            uncertainty_pct *= 0.6;
+        } else if (confidence > 0.5) {
+            uncertainty_pct *= 0.8;
+        }
+
+        return {
+            min_seconds: Math.max(0, Math.round(eta_seconds * (1 - uncertainty_pct))),
+            max_seconds: Math.round(eta_seconds * (1 + uncertainty_pct)),
+            min_minutes: Math.max(0, Math.round((eta_seconds * (1 - uncertainty_pct)) / 60)),
+            max_minutes: Math.round((eta_seconds * (1 + uncertainty_pct)) / 60)
         };
     }
 
 
-    calculateWeights(lastConfirmedStop, mlETA) {
+    /**
+     * Calculate dynamic weights using mathematical functions
+     * Uses continuous functions instead of discrete thresholds for smoother, more accurate weighting
+     */
+    calculateWeights(lastConfirmedStop, scheduleBasedETA, historicalETA, mlETA) {
         const weights = { schedule: 0, historical: 0, ml: 0 };
 
+        // No recent tracking data - rely heavily on schedule
         if (!lastConfirmedStop) {
             weights.schedule = 0.8;
             weights.historical = 0.2;
             weights.ml = 0;
-
             return this.normalizeWeights(weights);
         }
 
-        if (mlETA.mlPrediction && mlETA.confidence !== undefined) {
-            const mlConfidence = mlETA.confidence;
-            
-            const mlWeight = this.calculateMlWeight(mlConfidence);
-            const scheduleWeight = this.calculateScheduleWeight(mlConfidence);
+        // If ML prediction is available with confidence, use dynamic weighting
+        if (mlETA?.mlPrediction && mlETA.confidence !== undefined) {
+            const mlConfidence = mlETA.confidence; // This is the ML model's confidence (0-1)
+
+            // Also get checkpoint freshness if available
+            const checkpointFreshness = mlETA.features?.checkpoint_freshness_score || 0;
+
+            // Combine ML confidence and checkpoint freshness for a comprehensive trust score
+            // Both are 0-1, so we can take their geometric mean for a balanced score
+            const trustScore = Math.sqrt(mlConfidence * checkpointFreshness);
+
+            // Calculate ML weight using a sigmoid-like curve
+            // This provides smooth scaling: high trust → high ML weight, low trust → low ML weight
+            const mlWeight = this.calculateMLWeight(trustScore);
+
+            // Schedule weight inversely proportional to trust score
+            // Low trust → rely more on schedule
+            const scheduleWeight = this.calculateScheduleWeight(trustScore);
+
+            // Historical weight fills the gap, with a baseline contribution
             const historicalWeight = 1 - mlWeight - scheduleWeight;
-            
+
             weights.ml = Math.max(0, Math.min(1, mlWeight));
             weights.schedule = Math.max(0, Math.min(1, scheduleWeight));
             weights.historical = Math.max(0, Math.min(1, historicalWeight));
-        } else {
+        }
+        // No ML prediction - fallback to historical + schedule based on checkpoint age
+        else {
             const minutesSince = lastConfirmedStop.minutesSinceArrival;
 
-            const ageFactor = Math.exp(-minutesSince / 15);
+            // Use exponential decay for historical weight as data ages
+            const ageFactor = Math.exp(-minutesSince / 15); // Decay with 15-min half-life
 
-            weights.historical = 0.3 * ageFactor;
+            weights.historical = 0.3 + (0.4 * ageFactor); // Range: 0.3 to 0.7
             weights.schedule = 1 - weights.historical;
             weights.ml = 0;
         }
@@ -255,71 +327,43 @@ class ETAFusionEngine {
         return this.normalizeWeights(weights);
     }
 
-    calculateOverallConfidence(weights, mlETA, lastConfirmedStop) {
-        let confidence = 0;
+    /**
+     * Calculate ML weight using a smooth sigmoid-like function
+     * Maps trust score (0-1) to ML weight with configurable steepness
+     */
+    calculateMLWeight(trustScore) {
+        // Sigmoid function: w = max_weight / (1 + e^(-steepness * (trust - midpoint)))
+        const maxWeight = 0.70;  // Maximum ML weight when trust is very high
+        const steepness = 8;     // How quickly weight changes (higher = steeper curve)
+        const midpoint = 0.5;    // Trust score where weight is half of max
 
-        if (mlETA?.confidence && weights.ml > 0) {
-            confidence += mlETA.confidence * weights.ml;
-        }
-
-        if (weights.historical > 0) {
-            const historicalConf = lastConfirmedStop 
-                ? Math.max(0.3, 0.8 - (lastConfirmedStop.minutesSinceArrival / 30))
-                : 0.3;
-
-            confidence += historicalConf * weights.historical;
-        }
-
-        if (weights.schedule > 0) {
-            confidence += 0.4 * weights.schedule;
-        }
-
-        return Math.max(0, Math.min(1, confidence));
-    }
-
-    estimateUncertainty (eta_seconds, confidence) {
-        let uncertainty_pct = eta_seconds > 600 ? 0.3 : 0.2;
-
-        if (confidence > 0.7) {
-            uncertainty_pct *= 0.6;
-        } else if (confidence > 0.5) {
-            uncertainty_pct *= 0.75
-        } else {
-            uncertainty_pct *= 0.95;
-        }
-
-        return {
-            min_seconds: Math.max(0, Math.round(eta_seconds * (1 - uncertainty_pct))),
-            max_seconds: Math.round(eta_seconds * (1 + uncertainty_pct)),
-            min_minutes: Math.max(0, Math.round(eta_seconds * (1 - uncertainty_pct) / 60)),
-            max_minutes: Math.round(eta_seconds * (1 + uncertainty_pct) / 60),
-            min_arrival_time: new Date(Date.now() + Math.max(0, Math.round(eta_seconds * (1 - uncertainty_pct))) * 1000),
-            max_arrival_time: new Date(Date.now() + Math.round(eta_seconds * (1 + uncertainty_pct)) * 1000),
-        }
-    }
-
-    calculateMlWeight(confidence) {
-        const maxWeight = 0.70;
-        const steepness = 8;
-        const midpoint = 0.5;
-
-        const sigmoidValue = maxWeight / (1 + Math.exp(-steepness * (confidence - midpoint)));
+        const sigmoidValue = maxWeight / (1 + Math.exp(-steepness * (trustScore - midpoint)));
 
         return sigmoidValue;
     }
 
-    calculateScheduleWeight(confidence) {
-        const minWeight = 0.05;
-        const maxWeight = 0.70;
+    /**
+     * Calculate schedule weight - inversely related to trust score
+     * Low trust → high schedule weight (fallback to planned times)
+     */
+    calculateScheduleWeight(trustScore) {
+        // Inverse relationship with smooth curve
+        const minWeight = 0.05;  // Minimum schedule weight (even with high trust)
+        const maxWeight = 0.70;  // Maximum schedule weight (when trust is very low)
 
-        const scheduleWeight = minWeight + (maxWeight - minWeight) * (1 - confidence);
+        // Inverse sigmoid: starts high, decreases as trust increases
+        const scheduleWeight = minWeight + (maxWeight - minWeight) * (1 - trustScore);
 
         return scheduleWeight;
     }
 
+    /**
+     * Normalize weights to sum to 1.0
+     */
     normalizeWeights(weights) {
         const sum = Object.values(weights).reduce((a, b) => a + b, 0);
-        
+
+        // Safety check: if sum is 0, default to schedule-only
         if (sum === 0) {
             return { schedule: 1, historical: 0, ml: 0 };
         }
