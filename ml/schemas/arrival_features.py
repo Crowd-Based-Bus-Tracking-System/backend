@@ -2,42 +2,30 @@ from pydantic import BaseModel, Field
 from typing import Optional
 
 class ArrivalFeatures(BaseModel):
-    """
-    Features for ML-based arrival confirmation validation.
-    Used to validate if a crowdsourced bus arrival report should be confirmed.
-    """
-    
-    # Metadata
     bus_id: int = Field(description="Bus identifier")
     stop_id: int = Field(description="Stop identifier")
     arrival_time: float = Field(description="Reported arrival timestamp (Unix ms)")
     
-    # Report Metrics (5 features)
     report_count: int = Field(ge=0, description="Number of reports for this arrival")
     unique_reporters: int = Field(ge=0, description="Number of unique reporters")
     reports_per_minute: float = Field(ge=0, description="Report frequency")
     time_since_last_report_s: float = Field(ge=0, description="Seconds since last report")
     time_since_first_report_s: float = Field(ge=0, description="Seconds since first report")
     
-    # Spatial Features (5 features)
     distance_mean: Optional[float] = Field(None, ge=0, description="Mean distance of reporters from stop (meters)")
     distance_median: Optional[float] = Field(None, ge=0, description="Median distance of reporters from stop")
     distance_std: Optional[float] = Field(None, ge=0, description="Standard deviation of reporter distances")
     pct_within_radius: float = Field(ge=0, le=1, description="Percentage of reporters within radius")
     weighted_dist_mean: Optional[float] = Field(None, ge=0, description="Accuracy-weighted mean distance")
     
-    # Reporter Quality (1 feature)
     acc_mean: float = Field(ge=0, le=1, description="Average reporter accuracy score")
     
-    # Previous Arrival (2 features)
     prev_arrival_time: Optional[float] = Field(None, description="Previous arrival timestamp")
     time_since_last_arrival_s: Optional[float] = Field(None, ge=0, description="Time since bus last arrived")
     
-    # Temporal Statistics (2 features)
     t_mean: float = Field(description="Mean of reporter timestamps")
     t_std: float = Field(ge=0, description="Std dev of reporter timestamps")
     
-    # Time Features (8 features)
     hour_of_day: int = Field(ge=0, le=23, description="Hour of day (0-23)")
     day_of_week: int = Field(ge=0, le=6, description="Day of week (0=Sunday, 6=Saturday)")
     is_weekend: int = Field(ge=0, le=1, description="1 if weekend, 0 otherwise")
@@ -47,7 +35,6 @@ class ArrivalFeatures(BaseModel):
     is_evening: int = Field(ge=0, le=1, description="1 if evening (5-9 PM)")
     is_night: int = Field(ge=0, le=1, description="1 if night (9 PM - 5 AM)")
     
-    # Weather Features (7+ features)
     rain_1h: float = Field(ge=0, description="Rain in last hour (mm)")
     snow_1h: float = Field(ge=0, description="Snow in last hour (mm)")
     temperature: float = Field(ge=-50, le=60, description="Temperature (Celsius)")
@@ -56,7 +43,6 @@ class ArrivalFeatures(BaseModel):
     visibility: float = Field(ge=0, description="Visibility (meters)")
     weather_delay_multiplier: float = Field(ge=1.0, description="Weather-based delay multiplier")
     
-    # Weather Condition Flags (7 features - one-hot encoded)
     weather_clear: int = Field(ge=0, le=1, default=0, description="1 if clear weather")
     weather_rain: int = Field(ge=0, le=1, default=0, description="1 if rain/drizzle")
     weather_snow: int = Field(ge=0, le=1, default=0, description="1 if snow")
@@ -65,7 +51,6 @@ class ArrivalFeatures(BaseModel):
     weather_thunderstorm: int = Field(ge=0, le=1, default=0, description="1 if thunderstorm")
     weather_unknown: int = Field(ge=0, le=1, default=0, description="1 if weather unknown")
     
-    # Traffic & Events (2 features)
     traffic_level: int = Field(ge=0, le=4, default=0, description="0=unknown, 1=low, 2=medium, 3=high, 4=severe")
     event_nearby: int = Field(ge=0, le=1, default=0, description="1 if special event nearby")
     

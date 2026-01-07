@@ -2,17 +2,11 @@ from pydantic import BaseModel, Field
 from typing import Optional
 
 class ETAFeatures(BaseModel):
-    """
-    Features for ML-based ETA (Estimated Time of Arrival) prediction.
-    Designed for GPS-free crowdsourced bus tracking systems.
-    """
-    
-    # ========== METADATA (3 fields) ==========
+
     bus_id: int = Field(description="Bus identifier")
     target_stop_id: int = Field(description="Target stop to predict ETA for")
     prediction_made_at: float = Field(description="Timestamp when prediction is being made (Unix ms)")
     
-    # ========== SCHEDULE & DELAY FEATURES (10) ==========
     scheduled_arrival_time: Optional[float] = Field(None, description="Scheduled arrival timestamp (Unix ms)")
     seconds_until_scheduled: Optional[float] = Field(None, description="Seconds until scheduled arrival")
     current_delay_seconds: float = Field(default=0, description="Current delay at last checkpoint (seconds)")
@@ -24,7 +18,6 @@ class ETAFeatures(BaseModel):
     is_delay_accelerating: int = Field(ge=0, le=1, default=0, description="1 if delay is getting worse")
     delay_per_stop_rate: float = Field(default=0, description="Rate of delay change per stop (seconds/stop)")
     
-    # ========== ROUTE & SEGMENT FEATURES (9) ==========
     stops_remaining: int = Field(ge=0, description="Number of stops remaining to target")
     pct_route_completed: float = Field(ge=0, le=1, default=0, description="Percentage of route completed")
     distance_remaining_km: float = Field(ge=0, default=0, description="Estimated remaining distance (km)")
@@ -35,7 +28,6 @@ class ETAFeatures(BaseModel):
     max_segment_time: float = Field(ge=0, default=0, description="Maximum segment time in remaining route")
     segment_time_variance: float = Field(ge=0, default=0, description="Variance of segment times")
     
-    # ========== CHECKPOINT FRESHNESS FEATURES (7) - GPS-Free Specific ==========
     minutes_since_last_checkpoint: Optional[float] = Field(None, ge=0, description="Minutes since last confirmed arrival")
     checkpoint_freshness_score: float = Field(ge=0, le=1, default=0, description="Freshness score (1=just confirmed, 0=very stale)")
     checkpoint_age_penalty: float = Field(ge=1, default=2.0, description="Uncertainty multiplier based on data age")
@@ -44,7 +36,6 @@ class ETAFeatures(BaseModel):
     time_to_next_expected_report: Optional[float] = Field(None, ge=0, description="Expected seconds until next report")
     checkpoint_reliability_score: float = Field(ge=0, le=1, default=0.5, description="Historical checkpoint reliability")
     
-    # ========== HISTORICAL PATTERN FEATURES (10) ==========
     historical_delay_avg: float = Field(default=0, description="Historical average delay for this route/time")
     historical_delay_p50: float = Field(default=0, description="Median historical delay (50th percentile)")
     historical_delay_p90: float = Field(default=0, description="90th percentile historical delay")
@@ -56,7 +47,6 @@ class ETAFeatures(BaseModel):
     typical_delay_this_stop: float = Field(default=0, description="Typical delay at this specific stop")
     historical_sample_count: int = Field(ge=0, default=0, description="Number of historical samples used")
     
-    # ========== TIME FEATURES (6) ==========
     hour_of_day: int = Field(ge=0, le=23, description="Hour of day (0-23)")
     day_of_week: int = Field(ge=0, le=6, description="Day of week (0=Sunday, 6=Saturday)")
     is_weekend: int = Field(ge=0, le=1, description="1 if weekend, 0 otherwise")
@@ -64,7 +54,6 @@ class ETAFeatures(BaseModel):
     is_peak_period: int = Field(ge=0, le=1, description="1 if peak period (7 AM - 8 PM weekday)")
     minutes_into_rush_hour: float = Field(ge=0, default=0, description="Minutes into current rush hour")
     
-    # ========== WEATHER & CONTEXT FEATURES (10) ==========
     temperature: float = Field(ge=-50, le=60, default=20, description="Temperature (Celsius)")
     rain_1h: float = Field(ge=0, default=0, description="Rain in last hour (mm)")
     snow_1h: float = Field(ge=0, default=0, description="Snow in last hour (mm)")
@@ -76,7 +65,6 @@ class ETAFeatures(BaseModel):
     is_holiday: int = Field(ge=0, le=1, default=0, description="1 if public holiday")
     is_special_event: int = Field(ge=0, le=1, default=0, description="1 if special event nearby")
     
-    # ========== WEATHER CONDITION FLAGS (7) - One-Hot Encoded ==========
     weather_clear: int = Field(ge=0, le=1, default=0, description="1 if clear weather")
     weather_rain: int = Field(ge=0, le=1, default=0, description="1 if rain/drizzle")
     weather_snow: int = Field(ge=0, le=1, default=0, description="1 if snow")
@@ -85,7 +73,6 @@ class ETAFeatures(BaseModel):
     weather_thunderstorm: int = Field(ge=0, le=1, default=0, description="1 if thunderstorm")
     weather_unknown: int = Field(ge=0, le=1, default=0, description="1 if weather unknown")
     
-    # ========== REPORTER FEATURES (6) - Crowdsourced Unique ==========
     reporters_at_target_stop: int = Field(ge=0, default=0, description="Number of reporters waiting at target stop")
     avg_reporter_accuracy_target: float = Field(ge=0, le=1, default=0.5, description="Average accuracy of reporters at target")
     recent_report_density: float = Field(ge=0, default=0, description="Reports per minute recently")
