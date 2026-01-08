@@ -1,7 +1,7 @@
 import redis from "../../config/redis.js";
 import pool from "../../config/db.js";
 import BusProgressionService from "../busProgression.service.js";
-import BaseEtaService from "../eta.service.js";
+import { getScheduledTime, getSegmentTime } from "../../utils/eta-helpers.js";
 import { getScheduleForStop } from "../../models/shedule.js";
 import { getRouteStops } from "../../models/route.js";
 import { mean, median, stddev } from "../../utils/math.js";
@@ -9,7 +9,6 @@ import { getWeatherImpact, encodeWeatherCondition } from "../weather.service.js"
 import { getAverageDelayByHour, getAverageDelayToday, getDelaySByHourandDOW, getDelayTrend, getRecent7dArrivals, getStopDelays } from "../../models/arrival.js";
 
 const busProgressionService = new BusProgressionService();
-const baseEtaService = new BaseEtaService();
 
 const buildETAFeatures = async ({ busId, targetStopId, requestTime, location }) => {
     const now = requestTime || Date.now();
@@ -18,7 +17,13 @@ const buildETAFeatures = async ({ busId, targetStopId, requestTime, location }) 
 
     const targetSchedule = await getScheduleForStop(busId, targetStopId);
 
-    const remainingStops = await busProgressionService.getRemainingStops(busId, targetStopId);
+    let remainingStops = [];
+    try {
+        remainingStops = await busProgressionService.getRemainingStops(busId, targetStopId) || [];
+    } catch (error) {
+        console.warn(`Could not get remaining stops for bus ${busId} to stop ${targetStopId}:`, error.message);
+        remainingStops = [];
+    }
 
     const segmentFeatures = await calculateSegmentFeatures(
         busId,
@@ -87,7 +92,7 @@ async function calculateDelayFeatures(busId, lastCheckpoint, targetSchedule, now
     };
 
     if (targetSchedule) {
-        const scheduledTime = baseEtaService.getScheduledTime(targetSchedule);
+        const scheduledTime = getScheduledTime(targetSchedule);
         features.scheduled_arrival_time = scheduledTime;
         features.seconds_until_scheduled = (scheduledTime - now) / 1000;
     }
@@ -95,7 +100,7 @@ async function calculateDelayFeatures(busId, lastCheckpoint, targetSchedule, now
     if (lastCheckpoint) {
         const lastSchedule = await getScheduleForStop(busId, lastCheckpoint.stopId);
         if (lastSchedule) {
-            const scheduledTime = baseEtaService.getScheduledTime(lastSchedule);
+            const scheduledTime = getScheduledTime(lastSchedule);
             features.current_delay_seconds = (lastCheckpoint.arrivedAt - scheduledTime) / 1000;
             features.delay_at_last_stop = features.current_delay_seconds;
         }
@@ -141,7 +146,7 @@ async function calculateSegmentFeatures(fromStopId, remainingStops) {
     let currentFromId = fromStopId;
 
     for (const stop of remainingStops) {
-        const segmentTime = await baseEtaService.getSegmentTime(currentFromId || stop.id, stop.id);
+        const segmentTime = await getSegmentTime(currentFromId || stop.id, stop.id);
         segmentTimes.push(segmentTime);
         totalTime += segmentTime;
         currentFromId = stop.id;
