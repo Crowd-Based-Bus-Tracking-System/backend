@@ -48,5 +48,5 @@ def predict_eta_endpoint(data: ETAFeatures):
 @app.post("/store-eta")
 def store_eta(data: dict):
     df = pd.DataFrame([data])
-    df.to_csv("data/eta/eta_training.csv", mode="a", header=False, index=False)
+    df.to_csv("data/eta/eta.csv", mode="a", header=False, index=False)
     return {"status": "stored"}

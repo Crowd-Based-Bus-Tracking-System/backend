@@ -9,11 +9,15 @@ from lightgbm import LGBMRegressor
 from xgboost import XGBRegressor
 import joblib
 import os
+import sys
 from pydantic import ValidationError
-from schemas.eta_features import ETAFeatures
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_PATH = os.path.join(SCRIPT_DIR, "..", "data", "eta", "eta_training.csv")
+sys.path.insert(0, os.path.join(SCRIPT_DIR, '..'))
+
+from schemas.eta_features import ETAFeatures
+
+DATA_PATH = os.path.join(SCRIPT_DIR, "..", "data", "eta", "eta.csv")
 
 def train_eta_models(data_path=DATA_PATH):
     print(f"\nLoading data from: {data_path}")
@@ -22,11 +26,20 @@ def train_eta_models(data_path=DATA_PATH):
     print("\nValidating features with Pydantic schema...")
     validated_data = []
     validation_errors = 0
+    target_values = []
+    
+    TARGET_COLUMN = "actual_eta_seconds"
     
     for idx, row in df.iterrows():
         try:
-            eta_features = ETAFeatures(**row.to_dict())
-            validated_data.append(eta_features.dict())
+            row_dict = row.to_dict()
+            if TARGET_COLUMN in row_dict:
+                target_values.append(row_dict[TARGET_COLUMN])
+            else:
+                raise ValueError(f"Row {idx}: Missing target column '{TARGET_COLUMN}'")
+            
+            eta_features = ETAFeatures(**row_dict)
+            validated_data.append(eta_features.model_dump())
         except ValidationError as e:
             validation_errors += 1
             if validation_errors <= 5:
@@ -42,9 +55,10 @@ def train_eta_models(data_path=DATA_PATH):
         raise ValueError("No valid data after validation!")
     
     df = pd.DataFrame(validated_data)
+    df[TARGET_COLUMN] = target_values
     
     FEATURE_COLUMNS = [
-        field for field in ETAFeatures.__fields__
+        field for field in ETAFeatures.model_fields
         if field not in ["bus_id", "target_stop_id", "prediction_made_at"]
     ]
     

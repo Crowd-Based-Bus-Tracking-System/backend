@@ -9,10 +9,15 @@ from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.svm import SVR
 import joblib
 import os
+import sys
 from pydantic import ValidationError
-from schemas.arrival_features import ArrivalFeatures
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(SCRIPT_DIR, '..'))
+
+from schemas.arrival_features import ArrivalFeatures
+
+
 DATA_PATH = os.path.join(SCRIPT_DIR, "..", "data", "arrivals", "arrivals.csv")
 
 def train_arrival_models(data_path=DATA_PATH):
@@ -22,11 +27,20 @@ def train_arrival_models(data_path=DATA_PATH):
     print("\nValidating features with Pydantic schema...")
     validated_data = []
     validation_errors = 0
+    target_values = []
+    
+    TARGET_COLUMN = "confirm_prob"
     
     for idx, row in df.iterrows():
         try:
-            arrival_features = ArrivalFeatures(**row.to_dict())
-            validated_data.append(arrival_features.dict())
+            row_dict = row.to_dict()
+            if TARGET_COLUMN in row_dict:
+                target_values.append(row_dict[TARGET_COLUMN])
+            else:
+                raise ValueError(f"Row {idx}: Missing target column '{TARGET_COLUMN}'")
+            
+            arrival_features = ArrivalFeatures(**row_dict)
+            validated_data.append(arrival_features.model_dump())
         except ValidationError as e:
             validation_errors += 1
             if validation_errors <= 5:
@@ -39,9 +53,10 @@ def train_arrival_models(data_path=DATA_PATH):
         print(f"All {len(validated_data)} rows validated successfully")
     
     df = pd.DataFrame(validated_data)
+    df[TARGET_COLUMN] = target_values
     
     FEATURE_COLUMNS = [
-        field for field in ArrivalFeatures.__fields__
+        field for field in ArrivalFeatures.model_fields
         if field not in ["bus_id", "stop_id", "arrival_time"]
     ]
     
@@ -158,4 +173,4 @@ def train_arrival_models(data_path=DATA_PATH):
     }
 
 if __name__ == "__main__":
-    train_all_models()
+    train_arrival_models()

@@ -81,7 +81,7 @@ class ETAFeatures(BaseModel):
     reporter_cluster_tightness: float = Field(ge=0, default=0, description="How clustered are reporter positions")
     
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "bus_id": 123,
                 "target_stop_id": 456,
