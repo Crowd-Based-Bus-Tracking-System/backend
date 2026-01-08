@@ -20,7 +20,7 @@ def predict_arrival_endpoint(data: ArrivalFeatures):
     prob = predict_arrival_inference(data)
     return {
         "confirm_probability": prob,
-        "confirm": prob >= 0.6
+        "confirm": prob >= 0.4
     }
 
 @app.post("/store-arrival")

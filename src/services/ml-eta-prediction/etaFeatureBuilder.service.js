@@ -17,7 +17,13 @@ const buildETAFeatures = async ({ busId, targetStopId, requestTime, location }) 
 
     const targetSchedule = await getScheduleForStop(busId, targetStopId);
 
-    const remainingStops = await busProgressionService.getRemainingStops(busId, targetStopId);
+    let remainingStops = [];
+    try {
+        remainingStops = await busProgressionService.getRemainingStops(busId, targetStopId) || [];
+    } catch (error) {
+        console.warn(`Could not get remaining stops for bus ${busId} to stop ${targetStopId}:`, error.message);
+        remainingStops = [];
+    }
 
     const segmentFeatures = await calculateSegmentFeatures(
         busId,

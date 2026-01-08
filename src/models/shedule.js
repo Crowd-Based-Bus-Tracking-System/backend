@@ -1,3 +1,5 @@
+import pool from "../config/db.js";
+
 export const getScheduleForStop = async (busId, stopId) => {
     const result = await pool.query(`
         SELECT s.sheduled_arrival_time, s.day_type

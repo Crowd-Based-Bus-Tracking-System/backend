@@ -12,6 +12,7 @@ import os
 import sys
 from pydantic import ValidationError
 
+# Add parent directory to path for imports
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(SCRIPT_DIR, '..'))
 
@@ -34,13 +35,14 @@ def train_arrival_models(data_path=DATA_PATH):
     for idx, row in df.iterrows():
         try:
             row_dict = row.to_dict()
-            if TARGET_COLUMN in row_dict:
-                target_values.append(row_dict[TARGET_COLUMN])
-            else:
+            if TARGET_COLUMN not in row_dict:
                 raise ValueError(f"Row {idx}: Missing target column '{TARGET_COLUMN}'")
             
             arrival_features = ArrivalFeatures(**row_dict)
+           
             validated_data.append(arrival_features.model_dump())
+            target_values.append(row_dict[TARGET_COLUMN])
+            
         except ValidationError as e:
             validation_errors += 1
             if validation_errors <= 5:
@@ -61,8 +63,6 @@ def train_arrival_models(data_path=DATA_PATH):
     ]
     
     print(f"\nUsing {len(FEATURE_COLUMNS)} features from Pydantic schema")
-
-    TARGET_COLUMN = "confirm_prob"
 
     X = df[FEATURE_COLUMNS]
     y = df[TARGET_COLUMN]
