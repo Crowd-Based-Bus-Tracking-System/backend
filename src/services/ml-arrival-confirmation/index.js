@@ -4,10 +4,14 @@ const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
 
 export const predictArrival = async (features) => {
     try {
+        console.log("Sending features to ML API:", JSON.stringify(features, null, 2));
         const response = await axios.post(`${ML_SERVICE_URL}/predict-arrival`, features);
         return response.data;
     } catch (error) {
         console.error("Error predicting arrival:", error.message);
+        if (error.response?.data) {
+            console.error("ML API validation error:", JSON.stringify(error.response.data, null, 2));
+        }
         throw new Error(`Failed to predict arrival: ${error.message}`);
     }
 };

@@ -20,7 +20,7 @@ def predict_arrival_endpoint(data: ArrivalFeatures):
     prob = predict_arrival_inference(data)
     return {
         "confirm_probability": prob,
-        "confirm": prob >= 0.6
+        "confirm": prob >= 0.4
     }
 
 @app.post("/store-arrival")
@@ -48,5 +48,5 @@ def predict_eta_endpoint(data: ETAFeatures):
 @app.post("/store-eta")
 def store_eta(data: dict):
     df = pd.DataFrame([data])
-    df.to_csv("data/eta/eta_training.csv", mode="a", header=False, index=False)
+    df.to_csv("data/eta/eta.csv", mode="a", header=False, index=False)
     return {"status": "stored"}

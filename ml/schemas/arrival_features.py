@@ -55,7 +55,7 @@ class ArrivalFeatures(BaseModel):
     event_nearby: int = Field(ge=0, le=1, default=0, description="1 if special event nearby")
     
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "bus_id": 123,
                 "stop_id": 456,

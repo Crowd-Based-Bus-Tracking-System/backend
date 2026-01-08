@@ -4,46 +4,11 @@ import { getSegmentTimes } from "../models/segments.js";
 import { getScheduleForStop } from "../models/shedule.js";
 import { calculateSegmentTimeFromArrivals } from "../models/arrival.js";
 import { predictETAWithML } from "./ml-eta-prediction/mlEtaIntegration.service.js";
+import { getScheduledTime, getNextScheduledTime, getSegmentTime, calculateConfidence } from "../utils/eta-helpers.js";
 
 class BaseEtaService {
     constructor() {
         this.busProgressionService = new BusProgressionService();
-    }
-
-    getNextScheduledTime(schedule) {
-        if (!schedule) return null;
-
-        const now = new Date();
-        const [hours, minutes, seconds] = schedule.sheduled_arrival_time.split(':').map(Number);
-
-        const scheduledTime = new Date();
-        scheduledTime.setHours(hours, minutes, seconds || 0, 0);
-
-        if (scheduledTime < now) {
-            scheduledTime.setDate(scheduledTime.getDate() + 1);
-        }
-
-        return scheduledTime.getTime();
-    }
-
-    getScheduledTime(schedule) {
-        if (!schedule) return null;
-
-        const now = new Date();
-        const [hours, minutes, seconds] = schedule.sheduled_arrival_time.split(':').map(Number);
-
-        const scheduledTime = new Date();
-        scheduledTime.setHours(hours, minutes, seconds || 0, 0);
-
-        return scheduledTime.getTime();
-    }
-
-    calculateConfidence(minutesSinceLastArrival) {
-        if (minutesSinceLastArrival < 5) return 0.9;
-        if (minutesSinceLastArrival < 10) return 0.7;
-        if (minutesSinceLastArrival < 20) return 0.5;
-        if (minutesSinceLastArrival < 30) return 0.3;
-        return 0.1;
     }
 
     async calculateScheduleBasedETA(busId, targetStopId) {
@@ -55,7 +20,7 @@ class BaseEtaService {
         }
 
         const now = Date.now();
-        const scheduledTime = this.getNextScheduledTime(schedule);
+        const scheduledTime = getNextScheduledTime(schedule);
         const scheduledETA = (scheduledTime - now) / 1000;
 
         if (!lastConfirmedStop) {
@@ -67,7 +32,7 @@ class BaseEtaService {
         }
 
         const lastStopSchedule = await getScheduleForStop(busId, lastConfirmedStop.stopId);
-        const currentDelay = lastConfirmedStop.arrivedAt - this.getScheduledTime(lastStopSchedule);
+        const currentDelay = lastConfirmedStop.arrivedAt - getScheduledTime(lastStopSchedule);
 
         const eta_seconds = Math.max(0, (scheduledETA + currentDelay / 1000));
 
@@ -112,29 +77,12 @@ class BaseEtaService {
             method: "historical_segments",
             segment_count: remainingStops.length,
             time_since_last_arrival: timeSinceLastArrival,
-            confidence: this.calculateConfidence(lastConfirmedStop.minutesSinceArrival)
+            confidence: calculateConfidence(lastConfirmedStop.minutesSinceArrival)
         };
     }
 
     async getSegmentTime(fromStopId, toStopId) {
-        const cacheKey = `segment:${fromStopId}:${toStopId}`;
-        const cached = await redis.get(cacheKey);
-
-        if (cached) {
-            return parseInt(cached);
-        }
-
-        const result = await getSegmentTimes(fromStopId, toStopId);
-
-        if (result.length > 0) {
-            const avgTime = result[0].avg_travel_seconds;
-            await redis.setex(cacheKey, 600, avgTime);
-            return avgTime;
-        }
-
-        const avgTime = await calculateSegmentTimeFromArrivals(fromStopId, toStopId);
-        return avgTime || 300;
-
+        return await getSegmentTime(fromStopId, toStopId);
     }
 }
 
@@ -216,7 +164,7 @@ class ETAFusionEngine {
             methods_used: methods,
             weights: weights,
             uncertainty_range: uncertaintyRange,
-            
+
         };
     }
 
@@ -234,11 +182,11 @@ class ETAFusionEngine {
 
         if (mlETA.mlPrediction && mlETA.confidence !== undefined) {
             const mlConfidence = mlETA.confidence;
-            
+
             const mlWeight = this.calculateMlWeight(mlConfidence);
             const scheduleWeight = this.calculateScheduleWeight(mlConfidence);
             const historicalWeight = 1 - mlWeight - scheduleWeight;
-            
+
             weights.ml = Math.max(0, Math.min(1, mlWeight));
             weights.schedule = Math.max(0, Math.min(1, scheduleWeight));
             weights.historical = Math.max(0, Math.min(1, historicalWeight));
@@ -263,7 +211,7 @@ class ETAFusionEngine {
         }
 
         if (weights.historical > 0) {
-            const historicalConf = lastConfirmedStop 
+            const historicalConf = lastConfirmedStop
                 ? Math.max(0.3, 0.8 - (lastConfirmedStop.minutesSinceArrival / 30))
                 : 0.3;
 
@@ -277,7 +225,7 @@ class ETAFusionEngine {
         return Math.max(0, Math.min(1, confidence));
     }
 
-    estimateUncertainty (eta_seconds, confidence) {
+    estimateUncertainty(eta_seconds, confidence) {
         let uncertainty_pct = eta_seconds > 600 ? 0.3 : 0.2;
 
         if (confidence > 0.7) {
@@ -319,7 +267,7 @@ class ETAFusionEngine {
 
     normalizeWeights(weights) {
         const sum = Object.values(weights).reduce((a, b) => a + b, 0);
-        
+
         if (sum === 0) {
             return { schedule: 1, historical: 0, ml: 0 };
         }

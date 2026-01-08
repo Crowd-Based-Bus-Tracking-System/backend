@@ -15,7 +15,7 @@ const encodeTrafficLevel = (trafficLevel) => {
         case 'medium': return 2;
         case 'high': return 3;
         case 'severe': return 4;
-        default: return 0; 
+        default: return 0;
     }
 };
 
@@ -31,9 +31,8 @@ const buildFeatures = async (data, reportKey) => {
     const members = await redis.zrange(reportKey, 0, -1, "WITHSCORES");
     const reporters = parseMembersWithScores(members);
 
-    const arrivalTimeMs = arrivalTime * 1000;
-    const firstTs = reporters.length ? reporters[0].ts * 1000 : arrivalTimeMs;
-    const lastTs = reporters.length ? reporters[reporters.length - 1].ts * 1000 : arrivalTimeMs;
+    const firstTs = reporters.length ? reporters[0].ts : arrivalTime;
+    const lastTs = reporters.length ? reporters[reporters.length - 1].ts : arrivalTime;
 
     const spanS = (lastTs - firstTs) / 1000;
 
