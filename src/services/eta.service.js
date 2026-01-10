@@ -93,7 +93,9 @@ class ETAFusionEngine {
         this.busProgressionService = new BusProgressionService();
     }
 
-    async calculateFinalEta(busId, targetStopId, location) {
+    async calculateFinalEta(data) {
+        const { bus: { busId, routeId }, targetStopId, location } = data;
+
         const lastConfirmedStop = await this.baseEtaService.busProgressionService.getLastConfirmedStop(busId);
 
         const scheduleBasedETA = await this.baseEtaService.calculateScheduleBasedETA(
@@ -105,11 +107,7 @@ class ETAFusionEngine {
             targetStopId
         );
 
-        const mlETA = await predictETAWithML({
-            busId,
-            targetStopId,
-            location
-        });
+        const mlETA = await predictETAWithML(data);
 
         const weights = this.calculateWeights(
             lastConfirmedStop,

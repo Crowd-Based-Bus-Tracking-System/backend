@@ -1,8 +1,23 @@
 import { predictETA, storeETAData, checkMLServiceHealth, trainETAModel } from "./index.js";
 import buildETAFeatures from "./etaFeatureBuilder.service.js";
+import redis from "../../config/redis.js";
 
+const storePendingPrediction = async (busId, targetStopId, prediction) => {
+    const key = `eta_prediction:${busId}:${targetStopId}`;
+    await redis.set(key, JSON.stringify(prediction), "EX", 7200);
+};
 
-export const predictETAWithML = async ({ busId, targetStopId, location }) => {
+export const getPendingPrediction = async (busId, stopId) => {
+    const key = `eta_prediction:${busId}:${stopId}`;
+    const data = await redis.get(key);
+    if (data) {
+        await redis.del(key);
+        return JSON.parse(data);
+    }
+    return null;
+};
+
+export const predictETAWithML = async (data) => {
     try {
         const isAvailable = await checkMLServiceHealth();
         if (!isAvailable) {
@@ -10,14 +25,9 @@ export const predictETAWithML = async ({ busId, targetStopId, location }) => {
             return { mlPrediction: null, confidence: 0, features: null };
         }
 
-        const requestTime = Date.now();
+        const { bus: { busId }, targetStopId } = data;
 
-        const features = await buildETAFeatures({
-            busId,
-            targetStopId,
-            requestTime,
-            location
-        });
+        const features = await buildETAFeatures(data);
 
         console.log(`Built ${Object.keys(features).length} features for ETA prediction`);
 
@@ -25,13 +35,21 @@ export const predictETAWithML = async ({ busId, targetStopId, location }) => {
 
         console.log('ML ETA Prediction Response:', JSON.stringify(prediction, null, 2));
 
-        return {
+        const result = {
             mlPrediction: prediction.eta_seconds,
             confidence: prediction.confidence,
             etaMinutes: prediction.eta_minutes,
             features: features,
             method: "ml_prediction"
         };
+
+        try {
+            await storePendingPrediction(busId, targetStopId, result);
+        } catch (e) {
+            console.warn('Failed to store pending prediction:', e.message);
+        }
+
+        return result;
 
     } catch (error) {
         console.error("Error in ML ETA prediction:", error.message);

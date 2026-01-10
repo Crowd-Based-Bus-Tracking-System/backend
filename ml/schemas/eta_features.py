@@ -5,6 +5,8 @@ class ETAFeatures(BaseModel):
 
     bus_id: int = Field(description="Bus identifier")
     target_stop_id: int = Field(description="Target stop to predict ETA for")
+    route_id: Optional[int] = Field(None, description="Route identifier")
+    trip_id: Optional[int] = Field(None, description="Trip identifier")
     prediction_made_at: float = Field(description="Timestamp when prediction is being made (Unix ms)")
     
     scheduled_arrival_time: Optional[float] = Field(None, description="Scheduled arrival timestamp (Unix ms)")

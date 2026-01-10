@@ -138,6 +138,8 @@ def generate_arrival_features(bus_id, stop_id, arrival_time):
     return {
         'bus_id': bus_id,
         'stop_id': stop_id,
+        'route_id': ((bus_id - 1) // 3) + 1,  # Routes 1-3 based on bus_id
+        'trip_id': ((bus_id - 1) % 3) + 1 + (((bus_id - 1) // 3) * 3),  # Trip within route
         'arrival_time': int(arrival_time * 1000),
         'report_count': report_count,
         'unique_reporters': unique_reporters,
@@ -288,6 +290,8 @@ def generate_eta_features(bus_id, target_stop_id, prediction_time, scheduled_tim
     return {
         'bus_id': bus_id,
         'target_stop_id': target_stop_id,
+        'route_id': ((bus_id - 1) // 3) + 1,  # Routes 1-3 based on bus_id
+        'trip_id': ((bus_id - 1) % 3) + 1 + (((bus_id - 1) // 3) * 3),  # Trip within route
         'prediction_made_at': int(prediction_time * 1000),
         'scheduled_arrival_time': int(scheduled_time * 1000),
         'seconds_until_scheduled': seconds_until_scheduled,

@@ -11,8 +11,9 @@ import { getBusById } from "../../models/bus.js";
 
 const busProgressionService = new BusProgressionService();
 
-const buildETAFeatures = async ({ busId, targetStopId, requestTime, location }) => {
-    const now = requestTime || Date.now();
+const buildETAFeatures = async (data) => {
+    const { bus: { busId, routeId }, targetStopId, location } = data;
+    const now = Date.now();
 
     const lastCheckpoint = await busProgressionService.getLastConfirmedStop(busId);
 
@@ -26,15 +27,18 @@ const buildETAFeatures = async ({ busId, targetStopId, requestTime, location }) 
         remainingStops = [];
     }
 
-    const bus = await getBusById(busId);
-    const routeId = bus?.route_id;
+    let effectiveRouteId = routeId;
+    if (!effectiveRouteId) {
+        const bus = await getBusById(busId);
+        effectiveRouteId = bus?.route_id;
+    }
 
     const segmentFeatures = await calculateSegmentFeatures(
         busId,
         lastCheckpoint?.stopId,
         targetStopId,
         remainingStops,
-        routeId
+        effectiveRouteId
     );
 
     const delayFeatures = await calculateDelayFeatures(busId, targetStopId, lastCheckpoint, targetSchedule, now);
@@ -62,6 +66,7 @@ const buildETAFeatures = async ({ busId, targetStopId, requestTime, location }) 
     return {
         bus_id: busId,
         target_stop_id: targetStopId,
+        route_id: effectiveRouteId,
         prediction_made_at: now,
 
         ...delayFeatures,
