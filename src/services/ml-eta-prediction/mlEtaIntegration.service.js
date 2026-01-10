@@ -23,6 +23,8 @@ export const predictETAWithML = async ({ busId, targetStopId, location }) => {
 
         const prediction = await predictETA(features);
 
+        console.log('ML ETA Prediction Response:', JSON.stringify(prediction, null, 2));
+
         return {
             mlPrediction: prediction.eta_seconds,
             confidence: prediction.confidence,
@@ -98,7 +100,7 @@ export const logPredictionAccuracy = async (busId, stopId, actualArrivalTime, pr
     console.log(`ETA Prediction accuracy logged: Predicted=${predictedETA}s, Actual=${actualETA}s, Error=${error}s`);
 
     if (absError > 300) {
-        console.warn(`⚠️ Large ETA prediction error: ${absError}s for bus ${busId} at stop ${stopId}`);
+        console.warn(` Large ETA prediction error: ${absError}s for bus ${busId} at stop ${stopId}`);
     }
 };
 
