@@ -42,16 +42,34 @@ const STOPS_DATA = [
 ];
 
 const BUSES_DATA = [
-    { id: 1, bus_number: "BUS-001", route_id: 1, status: "ACTIVE" },
-    { id: 2, bus_number: "BUS-002", route_id: 1, status: "ACTIVE" },
-    { id: 3, bus_number: "BUS-003", route_id: 1, status: "ACTIVE" },
-    { id: 4, bus_number: "BUS-004", route_id: 2, status: "ACTIVE" },
-    { id: 5, bus_number: "BUS-005", route_id: 2, status: "ACTIVE" },
-    { id: 6, bus_number: "BUS-006", route_id: 2, status: "ACTIVE" },
-    { id: 7, bus_number: "BUS-007", route_id: 3, status: "ACTIVE" },
-    { id: 8, bus_number: "BUS-008", route_id: 3, status: "ACTIVE" },
-    { id: 9, bus_number: "BUS-009", route_id: 3, status: "ACTIVE" },
-    { id: 10, bus_number: "BUS-010", route_id: 3, status: "ACTIVE" }
+    { id: 1, bus_number: "BUS-001", route_id: 1, status: "ACTIVE", current_trip_id: 1 },
+    { id: 2, bus_number: "BUS-002", route_id: 1, status: "ACTIVE", current_trip_id: 2 },
+    { id: 3, bus_number: "BUS-003", route_id: 1, status: "ACTIVE", current_trip_id: 3 },
+    { id: 4, bus_number: "BUS-004", route_id: 2, status: "ACTIVE", current_trip_id: 4 },
+    { id: 5, bus_number: "BUS-005", route_id: 2, status: "ACTIVE", current_trip_id: 5 },
+    { id: 6, bus_number: "BUS-006", route_id: 2, status: "ACTIVE", current_trip_id: 6 },
+    { id: 7, bus_number: "BUS-007", route_id: 3, status: "ACTIVE", current_trip_id: 7 },
+    { id: 8, bus_number: "BUS-008", route_id: 3, status: "ACTIVE", current_trip_id: 8 },
+    { id: 9, bus_number: "BUS-009", route_id: 3, status: "ACTIVE", current_trip_id: 9 },
+    { id: 10, bus_number: "BUS-010", route_id: 3, status: "ACTIVE", current_trip_id: null }
+];
+
+// Each route has 3 trips: Morning, Afternoon, Evening
+const TRIPS_DATA = [
+    // Route 1: Downtown Express
+    { id: 1, route_id: 1, trip_name: "Downtown Morning", start_time: "06:00", end_time: "07:30" },
+    { id: 2, route_id: 1, trip_name: "Downtown Afternoon", start_time: "12:00", end_time: "13:30" },
+    { id: 3, route_id: 1, trip_name: "Downtown Evening", start_time: "18:00", end_time: "19:30" },
+
+    // Route 2: University Line
+    { id: 4, route_id: 2, trip_name: "University Morning", start_time: "07:00", end_time: "08:30" },
+    { id: 5, route_id: 2, trip_name: "University Afternoon", start_time: "13:00", end_time: "14:30" },
+    { id: 6, route_id: 2, trip_name: "University Evening", start_time: "17:00", end_time: "18:30" },
+
+    // Route 3: Airport Shuttle
+    { id: 7, route_id: 3, trip_name: "Airport Morning", start_time: "05:00", end_time: "06:30" },
+    { id: 8, route_id: 3, trip_name: "Airport Midday", start_time: "11:00", end_time: "12:30" },
+    { id: 9, route_id: 3, trip_name: "Airport Evening", start_time: "19:00", end_time: "20:30" }
 ];
 
 // Helper functions
@@ -88,14 +106,21 @@ async function clearDatabase() {
         await pool.query("DELETE FROM segment_times;");
         console.log("  ✓ Cleared segment_times");
 
+        await pool.query("DELETE FROM trip_schedules;");
+        console.log("  ✓ Cleared trip_schedules");
+
         await pool.query("DELETE FROM shedules;");
         console.log("  ✓ Cleared shedules");
 
         await pool.query("DELETE FROM users;");
         console.log("  ✓ Cleared users");
 
+        await pool.query("UPDATE buses SET current_trip_id = NULL;");
         await pool.query("DELETE FROM buses;");
         console.log("  ✓ Cleared buses");
+
+        await pool.query("DELETE FROM trips;");
+        console.log("  ✓ Cleared trips");
 
         await pool.query("DELETE FROM stops;");
         console.log("  ✓ Cleared stops");
@@ -111,6 +136,8 @@ async function clearDatabase() {
         await pool.query("ALTER SEQUENCE shedules_id_seq RESTART WITH 1;");
         await pool.query("ALTER SEQUENCE segment_times_id_seq RESTART WITH 1;");
         await pool.query("ALTER SEQUENCE arrivals_id_seq RESTART WITH 1;");
+        await pool.query("ALTER SEQUENCE trips_id_seq RESTART WITH 1;");
+        await pool.query("ALTER SEQUENCE trip_schedules_id_seq RESTART WITH 1;");
 
         console.log("  ✓ Reset all sequences\n");
     } catch (error) {
@@ -150,8 +177,8 @@ async function seedBuses() {
 
     for (const bus of BUSES_DATA) {
         await pool.query(
-            "INSERT INTO buses (id, bus_number, route_id, status) VALUES ($1, $2, $3, $4);",
-            [bus.id, bus.bus_number, bus.route_id, bus.status]
+            "INSERT INTO buses (id, bus_number, route_id, status, current_trip_id) VALUES ($1, $2, $3, $4, $5);",
+            [bus.id, bus.bus_number, bus.route_id, bus.status, bus.current_trip_id]
         );
     }
 
@@ -172,8 +199,52 @@ async function seedUsers() {
     console.log(`  ✓ Inserted ${userCount} users\n`);
 }
 
+async function seedTrips() {
+    console.log("🚍 Seeding trips...");
+
+    for (const trip of TRIPS_DATA) {
+        await pool.query(
+            "INSERT INTO trips (id, route_id, trip_name, start_time, end_time) VALUES ($1, $2, $3, $4, $5);",
+            [trip.id, trip.route_id, trip.trip_name, trip.start_time, trip.end_time]
+        );
+    }
+
+    console.log(`  ✓ Inserted ${TRIPS_DATA.length} trips\n`);
+}
+
+async function seedTripSchedules() {
+    console.log("📆 Seeding trip schedules...");
+
+    let scheduleCount = 0;
+
+    for (const trip of TRIPS_DATA) {
+        const routeStops = STOPS_DATA.filter(s => s.route_id === trip.route_id);
+
+        // Parse start time to calculate stop times
+        const [startHour, startMin] = trip.start_time.split(':').map(Number);
+        let currentMinutes = startHour * 60 + startMin;
+
+        for (let i = 0; i < routeStops.length; i++) {
+            const stop = routeStops[i];
+            const hours = Math.floor(currentMinutes / 60);
+            const minutes = currentMinutes % 60;
+            const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:00`;
+
+            await pool.query(
+                "INSERT INTO trip_schedules (trip_id, stop_id, scheduled_arrival_time, stop_sequence) VALUES ($1, $2, $3, $4);",
+                [trip.id, stop.id, timeStr, i + 1]
+            );
+            scheduleCount++;
+
+            currentMinutes += 12; // 12 minutes between stops
+        }
+    }
+
+    console.log(`  ✓ Inserted ${scheduleCount} trip schedules\n`);
+}
+
 async function seedSchedules() {
-    console.log("📅 Seeding schedules...");
+    console.log("📅 Seeding schedules (legacy)...");
 
     let scheduleCount = 0;
 
@@ -367,9 +438,11 @@ async function seed() {
         await clearDatabase();
         await seedRoutes();
         await seedStops();
+        await seedTrips();          // New: seed trips before buses (for FK)
         await seedBuses();
         await seedUsers();
-        await seedSchedules();
+        await seedTripSchedules();  // New: seed trip schedules
+        await seedSchedules();      // Legacy schedules (for backward compat)
         await seedSegmentTimes();
         await seedArrivals();
 
@@ -383,19 +456,23 @@ async function seed() {
             pool.query("SELECT COUNT(*) FROM stops"),
             pool.query("SELECT COUNT(*) FROM buses"),
             pool.query("SELECT COUNT(*) FROM users"),
+            pool.query("SELECT COUNT(*) FROM trips"),
+            pool.query("SELECT COUNT(*) FROM trip_schedules"),
             pool.query("SELECT COUNT(*) FROM shedules"),
             pool.query("SELECT COUNT(*) FROM segment_times"),
             pool.query("SELECT COUNT(*) FROM arrivals")
         ]);
 
         console.log("📊 Final row counts:");
-        console.log(`   Routes:        ${counts[0].rows[0].count}`);
-        console.log(`   Stops:         ${counts[1].rows[0].count}`);
-        console.log(`   Buses:         ${counts[2].rows[0].count}`);
-        console.log(`   Users:         ${counts[3].rows[0].count}`);
-        console.log(`   Schedules:     ${counts[4].rows[0].count}`);
-        console.log(`   Segment Times: ${counts[5].rows[0].count}`);
-        console.log(`   Arrivals:      ${counts[6].rows[0].count}`);
+        console.log(`   Routes:          ${counts[0].rows[0].count}`);
+        console.log(`   Stops:           ${counts[1].rows[0].count}`);
+        console.log(`   Buses:           ${counts[2].rows[0].count}`);
+        console.log(`   Users:           ${counts[3].rows[0].count}`);
+        console.log(`   Trips:           ${counts[4].rows[0].count}`);
+        console.log(`   Trip Schedules:  ${counts[5].rows[0].count}`);
+        console.log(`   Schedules:       ${counts[6].rows[0].count}`);
+        console.log(`   Segment Times:   ${counts[7].rows[0].count}`);
+        console.log(`   Arrivals:        ${counts[8].rows[0].count}`);
         console.log("\n");
 
     } catch (error) {
