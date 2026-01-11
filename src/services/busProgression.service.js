@@ -20,22 +20,38 @@ class BusProgressionService {
 
 
     async getRemainingStops(busId, targetStopId) {
-        const routeStops = await getRouteStops(busId);
-        const lastConfirmedStop = await this.getLastConfirmedStop(busId);
+        try {
+            const routeStops = await getRouteStops(busId);
 
-        const targetStopIndex = routeStops.findIndex(s => s.id === targetStopId);
+            if (!Array.isArray(routeStops) || routeStops.length === 0) {
+                console.warn(`No route stops found for bus ${busId}`);
+                return [];
+            }
 
-        if (!lastConfirmedStop) {
-            return routeStops.slice(0, targetStopIndex + 1);
-        }
+            const lastConfirmedStop = await this.getLastConfirmedStop(busId);
 
-        const lastStopIndex = routeStops.findIndex(s => s.id === lastConfirmedStop.stopId);
+            const targetStopIndex = routeStops.findIndex(s => s.id === targetStopId);
 
-        if (targetStopIndex <= lastStopIndex) {
+            if (targetStopIndex === -1) {
+                console.warn(`Target stop ${targetStopId} not found in route for bus ${busId}`);
+                return [];
+            }
+
+            if (!lastConfirmedStop) {
+                return routeStops.slice(0, targetStopIndex + 1);
+            }
+
+            const lastStopIndex = routeStops.findIndex(s => s.id === lastConfirmedStop.stopId);
+
+            if (targetStopIndex <= lastStopIndex) {
+                return [];
+            }
+
+            return routeStops.slice(lastStopIndex + 1, targetStopIndex + 1);
+        } catch (error) {
+            console.error(`Error getting remaining stops for bus ${busId}:`, error.message);
             return [];
         }
-
-        return routeStops.slice(lastStopIndex + 1, targetStopIndex + 1);
     }
 
 

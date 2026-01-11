@@ -4,6 +4,8 @@ from typing import Optional
 class ArrivalFeatures(BaseModel):
     bus_id: int = Field(description="Bus identifier")
     stop_id: int = Field(description="Stop identifier")
+    route_id: Optional[int] = Field(None, description="Route identifier")
+    trip_id: Optional[int] = Field(None, description="Trip identifier")
     arrival_time: float = Field(description="Reported arrival timestamp (Unix ms)")
     
     report_count: int = Field(ge=0, description="Number of reports for this arrival")

@@ -2,17 +2,21 @@ import redis from "../config/redis.js";
 import { checkDistance } from "../utils/check-distance.js";
 import { storeReporterPosition, increaseReporterStatsOnReport, increaseReporterStatsOnConfirm } from "./reporter.service.js";
 import { validateArrivalWithML, storeArrivalForTraining } from "./ml-arrival-confirmation/mlArrivalIntegration.service.js";
+import { getPendingPrediction, logPredictionAccuracy } from "./ml-eta-prediction/mlEtaIntegration.service.js";
 import { storeArrival, updateSegmentTime, getLastArrival } from "../models/arrival.js";
 import { getBusById } from "../models/bus.js";
 import { getWeatherImpact } from "./weather.service.js";
 import { getScheduleForStop } from "../models/shedule.js";
-import BaseEtaService from "./eta.service.js";
+import { getScheduledTime } from "../utils/eta-helpers.js";
 
-const baseEtaService = new BaseEtaService();
+const MIN_REPORTS = 3;
+const MIN_REPORT_INTERVAL = 60 * 1000;
+const ARRIVAL_EXPIRATION = 300;
+const RADIUS_MIN_METERS = 30000;
 
 export const reportArrival = async (data) => {
     const {
-        busId,
+        bus: { busId, routeId },
         stopId,
         arrivalTime,
         user
@@ -73,8 +77,8 @@ export const reportArrival = async (data) => {
         if (shouldConfirm) {
             await redis.set(confirmedKey, true, "EX", ARRIVAL_EXPIRATION);
 
-            await redis.set(`bus:${busId}:last_stop`, stopId.toString());
-            await redis.set(`bus:${busId}:last_arrival_time`, arrivalTime.toString());
+            await redis.set(`bus:${busId}:last_stop`, stopId.toString(), "EX", 86400);
+            await redis.set(`bus:${busId}:last_arrival_time`, arrivalTime.toString(), "EX", 86400);
 
             const members = await redis.zrange(reportKey, 0, -1);
             for (const reporterId of members) {
@@ -88,13 +92,16 @@ export const reportArrival = async (data) => {
             try {
                 const weatherImpact = await getWeatherImpact(user.lat, user.lng);
                 const stopSchedule = await getScheduleForStop(busId, stopId);
-                const stopScheduleTime = baseEtaService.getScheduledTime(stopSchedule);
-                const delayS = arrivalTime - stopScheduleTime;
+                const stopScheduleTimestamp = getScheduledTime(stopSchedule);
+                const delayS = arrivalTime - stopScheduleTimestamp;
+
+                const scheduledTimeObj = new Date(stopScheduleTimestamp);
+                const scheduledTime = scheduledTimeObj.toTimeString().split(' ')[0];
 
                 const arrivalRecord = await storeArrival({
                     busId,
                     stopId,
-                    scheduledTime: stopScheduleTime,
+                    scheduledTime: scheduledTime,
                     delaySeconds: delayS,
                     weather: weatherImpact.factors.weather_main,
                     trafficLevel: data.trafficLevel || null,
@@ -103,6 +110,15 @@ export const reportArrival = async (data) => {
                 });
 
                 console.log(`Arrival stored to database with ID: ${arrivalRecord.id}`);
+
+                try {
+                    const pendingPrediction = await getPendingPrediction(busId, stopId);
+                    if (pendingPrediction) {
+                        await logPredictionAccuracy(busId, stopId, arrivalTime, pendingPrediction);
+                    }
+                } catch (etaError) {
+                    console.warn("Failed to log ETA prediction accuracy:", etaError.message);
+                }
 
                 const lastArrival = await getLastArrival(busId);
                 if (lastArrival && lastArrival.stop_id !== stopId) {

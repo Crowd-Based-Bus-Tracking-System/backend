@@ -6,12 +6,14 @@ import { getScheduleForStop } from "../../models/shedule.js";
 import { getRouteStops } from "../../models/route.js";
 import { mean, median, stddev } from "../../utils/math.js";
 import { getWeatherImpact, encodeWeatherCondition } from "../weather.service.js";
-import { getAverageDelayByHour, getAverageDelayToday, getDelaySByHourandDOW, getDelayTrend, getRecent7dArrivals, getStopDelays } from "../../models/arrival.js";
+import { getAverageDelayByHour, getAverageDelayToday, getDelaySByHourandDOW, getDelayTrend, getRecent24hArrivals, getRecent7dArrivals, getStopDelays } from "../../models/arrival.js";
+import { getBusById } from "../../models/bus.js";
 
 const busProgressionService = new BusProgressionService();
 
-const buildETAFeatures = async ({ busId, targetStopId, requestTime, location }) => {
-    const now = requestTime || Date.now();
+const buildETAFeatures = async (data) => {
+    const { bus: { busId, routeId }, targetStopId, location } = data;
+    const now = Date.now();
 
     const lastCheckpoint = await busProgressionService.getLastConfirmedStop(busId);
 
@@ -25,14 +27,21 @@ const buildETAFeatures = async ({ busId, targetStopId, requestTime, location }) 
         remainingStops = [];
     }
 
+    let effectiveRouteId = routeId;
+    if (!effectiveRouteId) {
+        const bus = await getBusById(busId);
+        effectiveRouteId = bus?.route_id;
+    }
+
     const segmentFeatures = await calculateSegmentFeatures(
         busId,
         lastCheckpoint?.stopId,
         targetStopId,
-        remainingStops
+        remainingStops,
+        effectiveRouteId
     );
 
-    const delayFeatures = await calculateDelayFeatures(busId, lastCheckpoint, targetSchedule, now);
+    const delayFeatures = await calculateDelayFeatures(busId, targetStopId, lastCheckpoint, targetSchedule, now);
 
     const contextFeatures = await getContextualFeatures(location, now);
 
@@ -57,6 +66,7 @@ const buildETAFeatures = async ({ busId, targetStopId, requestTime, location }) 
     return {
         bus_id: busId,
         target_stop_id: targetStopId,
+        route_id: effectiveRouteId,
         prediction_made_at: now,
 
         ...delayFeatures,
@@ -77,7 +87,7 @@ const buildETAFeatures = async ({ busId, targetStopId, requestTime, location }) 
 };
 
 
-async function calculateDelayFeatures(busId, lastCheckpoint, targetSchedule, now) {
+async function calculateDelayFeatures(busId, targetStopId, lastCheckpoint, targetSchedule, now) {
     const features = {
         scheduled_arrival_time: null,
         seconds_until_scheduled: null,
@@ -110,7 +120,7 @@ async function calculateDelayFeatures(busId, lastCheckpoint, targetSchedule, now
     features.avg_delay_this_route_today = routeDelayToday;
 
     const hour = new Date(now).getHours();
-    const avgDelayHour = await getAverageDelayByHour(busId, targetStopId, hour);
+    const avgDelayHour = await getAverageDelayByHour(targetStopId, hour);
     features.avg_delay_same_hour = avgDelayHour;
 
     if (routeDelayToday !== null) {
@@ -127,7 +137,7 @@ async function calculateDelayFeatures(busId, lastCheckpoint, targetSchedule, now
 }
 
 
-async function calculateSegmentFeatures(fromStopId, remainingStops) {
+async function calculateSegmentFeatures(busId, fromStopId, targetStopId, remainingStops, routeId) {
     const features = {
         total_segment_time_remaining: 0,
         avg_segment_time_remaining: 0,
@@ -137,7 +147,7 @@ async function calculateSegmentFeatures(fromStopId, remainingStops) {
         segment_time_variance: 0
     };
 
-    if (remainingStops.length === 0) {
+    if (!remainingStops || remainingStops.length === 0) {
         return features;
     }
 
@@ -146,7 +156,7 @@ async function calculateSegmentFeatures(fromStopId, remainingStops) {
     let currentFromId = fromStopId;
 
     for (const stop of remainingStops) {
-        const segmentTime = await getSegmentTime(currentFromId || stop.id, stop.id);
+        const segmentTime = await getSegmentTime(currentFromId || stop.id, stop.id, routeId);
         segmentTimes.push(segmentTime);
         totalTime += segmentTime;
         currentFromId = stop.id;
@@ -158,6 +168,8 @@ async function calculateSegmentFeatures(fromStopId, remainingStops) {
     features.min_segment_time = Math.min(...segmentTimes) || 0;
     features.max_segment_time = Math.max(...segmentTimes) || 0;
     features.segment_time_variance = features.stddev_segment_time ** 2;
+
+    return features;
 }
 
 function calculateFreshnessFeatures(lastCheckpoint, now, avgSegmentTime = 300) {
@@ -178,9 +190,8 @@ function calculateFreshnessFeatures(lastCheckpoint, now, avgSegmentTime = 300) {
     const timeSinceMs = now - lastCheckpoint.arrivedAt;
     const minutesSince = timeSinceMs / 60000;
 
-    const freshness = Math.exp(-minutesSince / 10);
-
-    const agePenalty = 1 + (minutesSince / 30);
+    const freshness = Math.exp(-minutesSince / 20);
+    const agePenalty = 1 + (minutesSince / 10);
 
     const avgSegmentMinutes = avgSegmentTime / 60;
     const estimatedStopsPassed = avgSegmentMinutes > 0
@@ -260,7 +271,7 @@ async function getHistoricalPerformance(busId, stopId, now) {
 
 
 function calculateRouteFeatures(remainingStops, lastCheckpoint) {
-    const totalStops = remainingStops.length;
+    const totalStops = Array.isArray(remainingStops) ? remainingStops.length : 0;
 
     return {
         stops_remaining: totalStops,

@@ -1,9 +1,8 @@
 import redis from "../config/redis.js";
 import BusProgressionService from "./busProgression.service.js";
-import { getSegmentTimes } from "../models/segments.js";
 import { getScheduleForStop } from "../models/shedule.js";
-import { calculateSegmentTimeFromArrivals } from "../models/arrival.js";
 import { predictETAWithML } from "./ml-eta-prediction/mlEtaIntegration.service.js";
+import { getBusById } from "../models/bus.js";
 import { getScheduledTime, getNextScheduledTime, getSegmentTime, calculateConfidence } from "../utils/eta-helpers.js";
 
 class BaseEtaService {
@@ -60,11 +59,14 @@ class BaseEtaService {
             return { eta_seconds: 0, method: "already_passed" };
         }
 
+        const bus = await getBusById(busId);
+        const routeId = bus?.route_id;
+
         let totalTime = 0;
         let fromStopId = lastConfirmedStop.stopId;
 
         for (const stop of remainingStops) {
-            const segmentTime = await this.getSegmentTime(fromStopId, stop.id);
+            const segmentTime = await getSegmentTime(fromStopId, stop.id, routeId);
             totalTime += segmentTime;
             fromStopId = stop.id;
         }
@@ -80,10 +82,6 @@ class BaseEtaService {
             confidence: calculateConfidence(lastConfirmedStop.minutesSinceArrival)
         };
     }
-
-    async getSegmentTime(fromStopId, toStopId) {
-        return await getSegmentTime(fromStopId, toStopId);
-    }
 }
 
 export default BaseEtaService;
@@ -95,7 +93,9 @@ class ETAFusionEngine {
         this.busProgressionService = new BusProgressionService();
     }
 
-    async calculateFinalEta(busId, targetStopId, location) {
+    async calculateFinalEta(data) {
+        const { bus: { busId, routeId }, targetStopId, location } = data;
+
         const lastConfirmedStop = await this.baseEtaService.busProgressionService.getLastConfirmedStop(busId);
 
         const scheduleBasedETA = await this.baseEtaService.calculateScheduleBasedETA(
@@ -107,16 +107,10 @@ class ETAFusionEngine {
             targetStopId
         );
 
-        const mlETA = await predictETAWithML({
-            busId,
-            targetStopId,
-            location
-        });
+        const mlETA = await predictETAWithML(data);
 
         const weights = this.calculateWeights(
             lastConfirmedStop,
-            scheduleBasedETA,
-            historicalETA,
             mlETA
         );
 
