@@ -8,6 +8,7 @@ import { getBusById } from "../models/bus.js";
 import { getWeatherImpact } from "./weather.service.js";
 import { getScheduleForStop } from "../models/shedule.js";
 import { getScheduledTime } from "../utils/eta-helpers.js";
+import { emitBusArrival, emitBusETA, emitBusPosition } from "../socket/emitters/bus-updates.js";
 
 const MIN_REPORTS = 3;
 const MIN_REPORT_INTERVAL = 60 * 1000;
@@ -79,6 +80,13 @@ export const reportArrival = async (data) => {
 
             await redis.set(`bus:${busId}:last_stop`, stopId.toString(), "EX", 86400);
             await redis.set(`bus:${busId}:last_arrival_time`, arrivalTime.toString(), "EX", 86400);
+            
+            try {
+                await emitBusArrival(busId, stopId, arrivalTime);
+                await emitBusPosition(busId, routeId);
+            } catch (error) {
+                console.error("Failed to emit bus updates:", error);
+            }
 
             const members = await redis.zrange(reportKey, 0, -1);
             for (const reporterId of members) {

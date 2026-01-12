@@ -60,7 +60,7 @@ export async function getSegmentTime(fromStopId, toStopId, routeId = null) {
 
     let finalTime;
     if (segmentTimeAvg && arrivalTimeAvg) {
-        finalTime = Math.round(arrivalTimeAvg * 0.8 + segmentTimeAvg * 0.2);
+        finalTime = Math.round(arrivalTimeAvg * 0.85 + segmentTimeAvg * 0.15);
     } else if (segmentTimeAvg) {
         finalTime = segmentTimeAvg;
     } else if (arrivalTimeAvg) {
