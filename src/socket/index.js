@@ -1,5 +1,5 @@
 import { Server } from "socket.io";
-import { setupBusTrackingHandlers } from "./handlers/bus-tracking";
+import { setupBusTrackingHandlers } from "./handlers/bus-tracking.js";
 
 let io = null;
 

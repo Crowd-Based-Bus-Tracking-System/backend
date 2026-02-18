@@ -4,6 +4,7 @@ import { getScheduleForStop } from "../models/shedule.js";
 import { predictETAWithML } from "./ml-eta-prediction/mlEtaIntegration.service.js";
 import { getBusById } from "../models/bus.js";
 import { getScheduledTime, getNextScheduledTime, getSegmentTime, calculateConfidence } from "../utils/eta-helpers.js";
+import { emitBusETA } from "../socket/emitters/bus-updates.js";
 
 class BaseEtaService {
     constructor() {
@@ -147,6 +148,17 @@ class ETAFusionEngine {
 
         const confidence = this.calculateOverallConfidence(weights, mlETA, lastConfirmedStop);
         const uncertaintyRange = this.estimateUncertainty(finalETA, confidence);
+
+        try {
+            await emitBusETA(busId, targetStopId, {
+                eta_seconds: Math.round(finalETA),
+                eta_minutes: Math.round(finalETA / 60),
+                confidence: mlETA?.confidence || 0.5,
+                arrival_time: new Date(Date.now() + finalETA * 1000)
+            });
+        } catch (e) {
+            console.warn("ETA socket emit error:", e.message);
+        }
 
         return {
             eta_seconds: Math.round(finalETA),
