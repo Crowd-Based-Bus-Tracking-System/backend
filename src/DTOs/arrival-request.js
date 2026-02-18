@@ -1,10 +1,13 @@
-    import { z } from "zod";
+import { z } from "zod";
 
 
 export const ArrivalReportRequestSchema = z.object({
-    busId: z.number().int().positive(),
+    bus: z.object({
+        busId: z.number().int().positive(),
+        routeId: z.number().int().positive(),
+    }),
     stopId: z.number().int().positive(),
-    arrivalTime: z.number(),
+    arrivalTime: z.number().positive(),
     user: z.object({
         id: z.string().min(1),
         lat: z.number(),
@@ -12,4 +15,4 @@ export const ArrivalReportRequestSchema = z.object({
     }),
     trafficLevel: z.enum(['Low', 'Medium', 'High', 'Severe']).optional(),
     eventNearby: z.boolean().optional()
-});
+}); 

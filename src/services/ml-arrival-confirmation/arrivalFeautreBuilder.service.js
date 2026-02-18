@@ -21,7 +21,7 @@ const encodeTrafficLevel = (trafficLevel) => {
 
 const buildFeatures = async (data, reportKey) => {
     const {
-        busId,
+        bus: { busId, routeId },
         stopId,
         arrivalTime,
         user
@@ -107,6 +107,7 @@ const buildFeatures = async (data, reportKey) => {
     const features = {
         bus_id: busId,
         stop_id: stopId,
+        route_id: routeId,
         arrival_time: arrivalTime,
         report_count: reportCount,
         unique_reporters: uniqueReporters,

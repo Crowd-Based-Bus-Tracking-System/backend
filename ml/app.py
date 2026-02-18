@@ -25,9 +25,14 @@ def predict_arrival_endpoint(data: ArrivalFeatures):
 
 @app.post("/store-arrival")
 def store_arrival(data: dict):
-    df = pd.DataFrame([data])
-    df.to_csv("data/arrivals/arrivals.csv", mode="a", header=False, index=False)
-    return {"status": "stored"}
+    try:
+        validated = ArrivalFeatures(**data)
+        df = pd.DataFrame([validated.dict()])
+        df.to_csv("data/arrivals/arrivals.csv", mode="a", header=False, index=False)
+        return {"status": "stored"}
+    except Exception as e:
+        print(f"Error storing arrival data: {e}")
+        return {"status": "error", "message": str(e)}
 
 
 @app.post("/train-eta")
@@ -47,6 +52,11 @@ def predict_eta_endpoint(data: ETAFeatures):
 
 @app.post("/store-eta")
 def store_eta(data: dict):
-    df = pd.DataFrame([data])
-    df.to_csv("data/eta/eta.csv", mode="a", header=False, index=False)
-    return {"status": "stored"}
+    try:
+        validated = ETAFeatures(**data)
+        df = pd.DataFrame([validated.dict()])
+        df.to_csv("data/eta/eta.csv", mode="a", header=False, index=False)
+        return {"status": "stored"}
+    except Exception as e:
+        print(f"Error storing ETA data: {e}")
+        return {"status": "error", "message": str(e)}

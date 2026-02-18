@@ -126,8 +126,20 @@ export const getLastArrival = async (busId) => {
 };
 
 
-export const calculateSegmentTimeFromArrivals = async (fromStopId, toStopId) => {
-    const result = await pool.query(`
+
+export const calculateSegmentTimeFromArrivals = async (fromStopId, toStopId, routeId = null) => {
+    const query = routeId ? `
+        SELECT 
+            AVG(EXTRACT(EPOCH FROM (a2.arrived_at - a1.arrived_at))) as avg_seconds
+        FROM arrivals a1
+        JOIN arrivals a2 ON a1.bus_id = a2.bus_id
+        JOIN buses b ON a1.bus_id = b.id
+        WHERE a1.stop_id = $1 
+            AND a2.stop_id = $2
+            AND b.route_id = $3
+            AND a2.arrived_at > a1.arrived_at
+            AND EXTRACT(EPOCH FROM (a2.arrived_at - a1.arrived_at)) BETWEEN 0 AND 7200
+    ` : `
         SELECT 
             AVG(EXTRACT(EPOCH FROM (a2.arrived_at - a1.arrived_at))) as avg_seconds
         FROM arrivals a1
@@ -136,7 +148,10 @@ export const calculateSegmentTimeFromArrivals = async (fromStopId, toStopId) => 
             AND a2.stop_id = $2
             AND a2.arrived_at > a1.arrived_at
             AND EXTRACT(EPOCH FROM (a2.arrived_at - a1.arrived_at)) BETWEEN 0 AND 7200
-    `, [fromStopId, toStopId]);
+    `;
+
+    const params = routeId ? [fromStopId, toStopId, routeId] : [fromStopId, toStopId];
+    const result = await pool.query(query, params);
 
     return result.rows[0]?.avg_seconds ? Math.round(result.rows[0].avg_seconds) : null;
 };
@@ -187,7 +202,7 @@ export const getDelayTrend = async (busId) => {
     return result;
 }
 
-export const getDelaySByHourandDOW = async (stopId, hour, dayOfWeek) =>{
+export const getDelaySByHourandDOW = async (stopId, hour, dayOfWeek) => {
     try {
         const result = await pool.query(`
             SELECT delay_seconds

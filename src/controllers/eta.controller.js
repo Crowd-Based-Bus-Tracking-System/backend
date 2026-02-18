@@ -7,11 +7,7 @@ export const getETAPrediction = async (req, res) => {
     try {
         const data = ETAPredictionRequestSchema.parse(req.body);
 
-        const etaResult = await etaFusionEngine.calculateFinalEta(
-            data.busId,
-            data.targetStopId,
-            data.location || null
-        );
+        const etaResult = await etaFusionEngine.calculateFinalEta(data);
 
         return res.status(200).json({
             success: true,

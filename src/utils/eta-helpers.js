@@ -31,24 +31,47 @@ export function getNextScheduledTime(schedule) {
     return scheduledTime.getTime();
 }
 
-export async function getSegmentTime(fromStopId, toStopId) {
-    const cacheKey = `segment:${fromStopId}:${toStopId}`;
-    const cached = await redis.get(cacheKey);
+export async function getSegmentTime(fromStopId, toStopId, routeId = null) {
+    const cacheKey = routeId
+        ? `segment:${routeId}:${fromStopId}:${toStopId}`
+        : `segment:${fromStopId}:${toStopId}`;
 
+    const cached = await redis.get(cacheKey);
     if (cached) {
         return parseInt(cached);
     }
 
-    const result = await getSegmentTimes(fromStopId, toStopId);
+    let segmentTimeAvg = null;
+    let arrivalTimeAvg = null;
 
-    if (result.length > 0) {
-        const avgTime = result[0].avg_travel_seconds;
-        await redis.setex(cacheKey, 600, avgTime);
-        return avgTime;
+    if (routeId) {
+        const result = await getSegmentTimes(fromStopId, toStopId, routeId);
+        if (result.length > 0) {
+            segmentTimeAvg = result[0].avg_travel_seconds;
+        }
+    } else {
+        const result = await getSegmentTimes(fromStopId, toStopId);
+        if (result.length > 0) {
+            segmentTimeAvg = result[0].avg_travel_seconds;
+        }
     }
 
-    const avgTime = await calculateSegmentTimeFromArrivals(fromStopId, toStopId);
-    return avgTime || 300;
+    arrivalTimeAvg = await calculateSegmentTimeFromArrivals(fromStopId, toStopId, routeId);
+
+    let finalTime;
+    if (segmentTimeAvg && arrivalTimeAvg) {
+        finalTime = Math.round(arrivalTimeAvg * 0.85 + segmentTimeAvg * 0.15);
+    } else if (segmentTimeAvg) {
+        finalTime = segmentTimeAvg;
+    } else if (arrivalTimeAvg) {
+        finalTime = arrivalTimeAvg;
+    } else {
+        finalTime = 300;
+    }
+
+    await redis.setex(cacheKey, 3600, finalTime);
+
+    return finalTime;
 }
 
 export function calculateConfidence(minutesSinceLastArrival) {

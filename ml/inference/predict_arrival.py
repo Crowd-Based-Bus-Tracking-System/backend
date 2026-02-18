@@ -24,5 +24,6 @@ def predict_arrival(features: ArrivalFeatures) -> float:
     X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
     
     prob = model.predict(X)[0]
+    print("Probability:", prob)
     
     return float(np.clip(prob, 0.0, 1.0))
