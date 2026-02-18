@@ -1,7 +1,7 @@
-import { getIO } from "..";
-import redis from "../../config/redis"
-import { getStopById } from "../../models/stops";
-import { getSegmentTime } from "../../utils/eta-helpers";
+import { getIO } from "../index.js";
+import redis from "../../config/redis.js"
+import { getStopById } from "../../models/stops.js";
+import { getSegmentTime } from "../../utils/eta-helpers.js";
 
 
 export const getBusStatus = async (busId, routeId) => {
@@ -60,9 +60,9 @@ export const emitBusArrival = async (busId, stopId, arrivalTime) => {
 
 export const emitBusETA = async (busId, targetStopId, etaData) => {
     const io = getIO;
-    
+
     io.to(`bus:${busId}`).emit("bus:eta", {
-        busId, 
+        busId,
         targetStopId,
         eta_seconds: etaData.eta_seconds,
         eta_minutes: etaData.eta_minutes,
