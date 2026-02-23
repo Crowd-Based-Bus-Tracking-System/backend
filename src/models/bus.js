@@ -12,3 +12,15 @@ export const getBusById = async (busId) => {
         return null;
     }
 };
+
+export const getBusesByRoute = async (routeId) => {
+    const query = `SELECT id, bus_number, route_id, status FROM buses WHERE route_id = $1 AND status = 'ACTIVE';`;
+
+    try {
+        const result = await pool.query(query, [routeId]);
+        return result.rows;
+    } catch (error) {
+        console.error("Error fetching buses by route:", error.message);
+        return [];
+    }
+};
