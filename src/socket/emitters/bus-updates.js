@@ -78,3 +78,9 @@ export const emitBusPosition = async (busId, routeId) => {
     const status = await getBusStatus(busId, routeId);
     io.to(`bus:${busId}`).emit("bus:position", status);
 }
+
+
+export const emitRouteBusesUpdate = (routeId, busesData) => {
+    const io = getIO();
+    io.to(`route:${routeId}`).emit("route:buses:update", busesData);
+}

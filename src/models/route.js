@@ -12,3 +12,12 @@ export const getRouteStops = async (busId) => {
 
     return result.rows;
 };
+
+export const getRouteById = async (routeId) => {
+    const result = await pool.query(
+        `SELECT * FROM routes WHERE id = $1`,
+        [routeId]
+    )
+    return result.rows[0];
+}
+ 
