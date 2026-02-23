@@ -160,6 +160,20 @@ class ETAFusionEngine {
             console.warn("ETA socket emit error:", e.message);
         }
 
+        try {
+            const etaKey = `eta:${routeId}:${busId}:${targetStopId}`;
+            await redis.hset(etaKey, {
+                eta_seconds: String(Math.round(finalETA)),
+                eta_minutes: String(Math.round(finalETA / 60)),
+                confidence: String(confidence),
+                arrival_time: new Date(Date.now() + finalETA * 1000).toISOString(),
+                updated_at: new Date().toISOString()
+            });
+            await redis.expire(etaKey, 300);
+        } catch (e) {
+            console.warn("ETA Redis store error:", e.message);
+        }
+
         return {
             eta_seconds: Math.round(finalETA),
             eta_minutes: Math.round(finalETA / 60),

@@ -4,6 +4,7 @@ dotenv.config();
 import arrivalRouter from "./routes/arrival.route.js";
 import mlIntegrationRouter from "./routes/mlIntegration.route.js";
 import etaRouter from "./routes/eta.route.js";
+import authRouter from "./routes/auth.route.js"
 import { createServer } from "http";
 import { initializeSocket } from "./socket/index.js";
 
@@ -23,6 +24,7 @@ app.use(express.json());
 app.use("/api/arrival", arrivalRouter);
 app.use("/api/mlIntegration", mlIntegrationRouter);
 app.use("/api/eta", etaRouter);
+app.use("/api/auth", authRouter);
 
 async function startServer() {
     try {
