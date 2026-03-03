@@ -8,3 +8,5 @@ CREATE TABLE IF NOT EXISTS buses (
 );
 
 CREATE INDEX IF NOT EXISTS idx_buses_trip ON buses(current_trip_id);
+
+ALTER TABLE trips ADD CONSTRAINT fk_trips_bus FOREIGN KEY (bus_id) REFERENCES buses(id) ON DELETE SET NULL;

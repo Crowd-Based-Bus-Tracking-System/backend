@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS trips (
     id SERIAL PRIMARY KEY,
     route_id INT NOT NULL REFERENCES routes(id) ON DELETE CASCADE,
+    bus_id INT,
     trip_name VARCHAR(100) NOT NULL,
     start_time TIME NOT NULL,
     end_time TIME,
