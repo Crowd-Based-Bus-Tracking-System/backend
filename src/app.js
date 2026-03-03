@@ -4,13 +4,13 @@ dotenv.config();
 import arrivalRouter from "./routes/arrival.route.js";
 import mlIntegrationRouter from "./routes/mlIntegration.route.js";
 import etaRouter from "./routes/eta.route.js";
-import authRouter from "./routes/auth.route.js"
+import authRouter from "./routes/auth.route.js";
+import routeRouter from "./routes/route.route.js";
 import { createServer } from "http";
 import { initializeSocket } from "./socket/index.js";
 
 const express = (await import("express")).default;
 const cors = (await import("cors")).default;
-const { initDb } = await import("./db/init.js");
 
 const PORT = process.env.PORT || 3000;
 const app = express();
@@ -25,13 +25,9 @@ app.use("/api/arrival", arrivalRouter);
 app.use("/api/mlIntegration", mlIntegrationRouter);
 app.use("/api/eta", etaRouter);
 app.use("/api/auth", authRouter);
+app.use("/api/routes", routeRouter);
 
 async function startServer() {
-    try {
-        await initDb();
-    } catch (error) {
-        console.error("Failed to initialize database:", error);
-    }
     httpServer.listen(PORT, () => {
         console.log(`Server running on port ${PORT}`);
     });

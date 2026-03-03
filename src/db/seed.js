@@ -8,68 +8,81 @@ const __dirname = path.dirname(__filename);
 
 // Sample data structure
 const ROUTES_DATA = [
-    { id: 1, name: "Downtown Express", start_city: "Central Station", end_city: "North Terminal" },
-    { id: 2, name: "University Line", start_city: "Main Campus", end_city: "Tech Park" },
-    { id: 3, name: "Airport Shuttle", start_city: "City Center", end_city: "International Airport" }
+    { id: 1, route_number: "138", name: "Colombo - Kandy", start_city: "Colombo Fort", end_city: "Kandy" },
+    { id: 2, route_number: "2", name: "Colombo - Galle", start_city: "Colombo Fort", end_city: "Galle" },
+    { id: 3, route_number: "4", name: "Colombo - Jaffna", start_city: "Colombo Fort", end_city: "Jaffna" },
+    { id: 4, route_number: "99", name: "Colombo - Matara", start_city: "Colombo Fort", end_city: "Matara" },
+    { id: 5, route_number: "48", name: "Kandy - Nuwara Eliya", start_city: "Kandy", end_city: "Nuwara Eliya" }
 ];
 
 const STOPS_DATA = [
-    // Route 1 stops (ids 1-7)
-    { id: 1, route_id: 1, name: "Central Station", latitude: 6.9271, longitude: 79.8612, sequence: 1 },
-    { id: 2, route_id: 1, name: "City Hall", latitude: 6.9319, longitude: 79.8478, sequence: 2 },
-    { id: 3, route_id: 1, name: "Market Square", latitude: 6.9368, longitude: 79.8501, sequence: 3 },
-    { id: 4, route_id: 1, name: "Park Junction", latitude: 6.9415, longitude: 79.8553, sequence: 4 },
-    { id: 5, route_id: 1, name: "Memorial Plaza", latitude: 6.9462, longitude: 79.8605, sequence: 5 },
-    { id: 6, route_id: 1, name: "Shopping Center", latitude: 6.9509, longitude: 79.8657, sequence: 6 },
-    { id: 7, route_id: 1, name: "North Terminal", latitude: 6.9556, longitude: 79.8709, sequence: 7 },
-
-    // Route 2 stops (ids 8-14)
-    { id: 8, route_id: 2, name: "Main Campus", latitude: 6.9015, longitude: 79.8607, sequence: 1 },
-    { id: 9, route_id: 2, name: "Library Corner", latitude: 6.9062, longitude: 79.8659, sequence: 2 },
-    { id: 10, route_id: 2, name: "Science Block", latitude: 6.9109, longitude: 79.8711, sequence: 3 },
-    { id: 11, route_id: 2, name: "Student Center", latitude: 6.9156, longitude: 79.8763, sequence: 4 },
-    { id: 12, route_id: 2, name: "Medical Faculty", latitude: 6.9203, longitude: 79.8815, sequence: 5 },
-    { id: 13, route_id: 2, name: "Engineering Wing", latitude: 6.9250, longitude: 79.8867, sequence: 6 },
-    { id: 14, route_id: 2, name: "Tech Park", latitude: 6.9297, longitude: 79.8919, sequence: 7 },
-
-    // Route 3 stops (ids 15-20)
-    { id: 15, route_id: 3, name: "City Center", latitude: 6.9271, longitude: 79.8612, sequence: 1 },
-    { id: 16, route_id: 3, name: "Hotel District", latitude: 6.9100, longitude: 79.8850, sequence: 2 },
-    { id: 17, route_id: 3, name: "Highway Exit", latitude: 6.8929, longitude: 79.9088, sequence: 3 },
-    { id: 18, route_id: 3, name: "Cargo Terminal", latitude: 6.8758, longitude: 79.9326, sequence: 4 },
-    { id: 19, route_id: 3, name: "Domestic Terminal", latitude: 6.8587, longitude: 79.9564, sequence: 5 },
-    { id: 20, route_id: 3, name: "International Airport", latitude: 6.8416, longitude: 79.9802, sequence: 6 }
+    { id: 1, route_id: 1, name: "Colombo Fort", latitude: 6.9344, longitude: 79.8428, sequence: 1 },
+    { id: 2, route_id: 1, name: "Kadawatha", latitude: 7.0013, longitude: 79.953, sequence: 2 },
+    { id: 3, route_id: 1, name: "Kadugannawa", latitude: 7.2547, longitude: 80.5243, sequence: 3 },
+    { id: 4, route_id: 1, name: "Peradeniya", latitude: 7.269, longitude: 80.5942, sequence: 4 },
+    { id: 5, route_id: 1, name: "Kandy", latitude: 7.2906, longitude: 80.6337, sequence: 5 },
+    { id: 6, route_id: 2, name: "Colombo Fort", latitude: 6.9344, longitude: 79.8428, sequence: 1 },
+    { id: 7, route_id: 2, name: "Moratuwa", latitude: 6.773, longitude: 79.8816, sequence: 2 },
+    { id: 8, route_id: 2, name: "Panadura", latitude: 6.7136, longitude: 79.9044, sequence: 3 },
+    { id: 9, route_id: 2, name: "Ambalangoda", latitude: 6.2352, longitude: 80.054, sequence: 4 },
+    { id: 10, route_id: 2, name: "Galle", latitude: 6.0535, longitude: 80.221, sequence: 5 },
+    { id: 11, route_id: 3, name: "Colombo Fort", latitude: 6.9344, longitude: 79.8428, sequence: 1 },
+    { id: 12, route_id: 3, name: "Kurunegala", latitude: 7.4863, longitude: 80.3623, sequence: 2 },
+    { id: 13, route_id: 3, name: "Dambulla", latitude: 7.8742, longitude: 80.6511, sequence: 3 },
+    { id: 14, route_id: 3, name: "Anuradhapura", latitude: 8.3114, longitude: 80.4037, sequence: 4 },
+    { id: 15, route_id: 3, name: "Kilinochchi", latitude: 9.3803, longitude: 80.377, sequence: 5 },
+    { id: 16, route_id: 3, name: "Jaffna", latitude: 9.6615, longitude: 80.0255, sequence: 6 },
+    { id: 17, route_id: 4, name: "Colombo Fort", latitude: 6.9344, longitude: 79.8428, sequence: 1 },
+    { id: 18, route_id: 4, name: "Panadura", latitude: 6.7136, longitude: 79.9044, sequence: 2 },
+    { id: 19, route_id: 4, name: "Galle", latitude: 6.0535, longitude: 80.221, sequence: 3 },
+    { id: 20, route_id: 4, name: "Weligama", latitude: 5.9745, longitude: 80.4296, sequence: 4 },
+    { id: 21, route_id: 4, name: "Matara", latitude: 5.9549, longitude: 80.555, sequence: 5 },
+    { id: 22, route_id: 5, name: "Kandy", latitude: 7.2906, longitude: 80.6337, sequence: 1 },
+    { id: 23, route_id: 5, name: "Gampola", latitude: 7.1642, longitude: 80.5767, sequence: 2 },
+    { id: 24, route_id: 5, name: "Nawalapitiya", latitude: 7.0489, longitude: 80.5345, sequence: 3 },
+    { id: 25, route_id: 5, name: "Nuwara Eliya", latitude: 6.9497, longitude: 80.7891, sequence: 4 }
 ];
 
 const BUSES_DATA = [
-    { id: 1, bus_number: "BUS-001", route_id: 1, status: "ACTIVE", current_trip_id: 1 },
-    { id: 2, bus_number: "BUS-002", route_id: 1, status: "ACTIVE", current_trip_id: 2 },
-    { id: 3, bus_number: "BUS-003", route_id: 1, status: "ACTIVE", current_trip_id: 3 },
-    { id: 4, bus_number: "BUS-004", route_id: 2, status: "ACTIVE", current_trip_id: 4 },
-    { id: 5, bus_number: "BUS-005", route_id: 2, status: "ACTIVE", current_trip_id: 5 },
-    { id: 6, bus_number: "BUS-006", route_id: 2, status: "ACTIVE", current_trip_id: 6 },
-    { id: 7, bus_number: "BUS-007", route_id: 3, status: "ACTIVE", current_trip_id: 7 },
-    { id: 8, bus_number: "BUS-008", route_id: 3, status: "ACTIVE", current_trip_id: 8 },
-    { id: 9, bus_number: "BUS-009", route_id: 3, status: "ACTIVE", current_trip_id: 9 },
-    { id: 10, bus_number: "BUS-010", route_id: 3, status: "ACTIVE", current_trip_id: null }
+    { id: 1, bus_number: "NB-1234", route_id: 1, status: "ACTIVE", current_trip_id: null },
+    { id: 2, bus_number: "NC-5678", route_id: 1, status: "ACTIVE", current_trip_id: null },
+    { id: 3, bus_number: "WP-9012", route_id: 1, status: "ACTIVE", current_trip_id: null },
+    { id: 4, bus_number: "SP-3456", route_id: 2, status: "ACTIVE", current_trip_id: null },
+    { id: 5, bus_number: "SP-7890", route_id: 2, status: "ACTIVE", current_trip_id: null },
+    { id: 6, bus_number: "NP-1111", route_id: 3, status: "ACTIVE", current_trip_id: null },
+    { id: 7, bus_number: "NP-2222", route_id: 3, status: "ACTIVE", current_trip_id: null },
+    { id: 8, bus_number: "SG-4444", route_id: 4, status: "ACTIVE", current_trip_id: null },
+    { id: 9, bus_number: "CP-5555", route_id: 5, status: "ACTIVE", current_trip_id: null },
+    { id: 10, bus_number: "CP-6666", route_id: 5, status: "ACTIVE", current_trip_id: null }
 ];
 
 // Each route has 3 trips: Morning, Afternoon, Evening
 const TRIPS_DATA = [
-    // Route 1: Downtown Express
-    { id: 1, route_id: 1, trip_name: "Downtown Morning", start_time: "06:00", end_time: "07:30" },
-    { id: 2, route_id: 1, trip_name: "Downtown Afternoon", start_time: "12:00", end_time: "13:30" },
-    { id: 3, route_id: 1, trip_name: "Downtown Evening", start_time: "18:00", end_time: "19:30" },
-
-    // Route 2: University Line
-    { id: 4, route_id: 2, trip_name: "University Morning", start_time: "07:00", end_time: "08:30" },
-    { id: 5, route_id: 2, trip_name: "University Afternoon", start_time: "13:00", end_time: "14:30" },
-    { id: 6, route_id: 2, trip_name: "University Evening", start_time: "17:00", end_time: "18:30" },
-
-    // Route 3: Airport Shuttle
-    { id: 7, route_id: 3, trip_name: "Airport Morning", start_time: "05:00", end_time: "06:30" },
-    { id: 8, route_id: 3, trip_name: "Airport Midday", start_time: "11:00", end_time: "12:30" },
-    { id: 9, route_id: 3, trip_name: "Airport Evening", start_time: "19:00", end_time: "20:30" }
+    { id: 1, route_id: 1, trip_name: "trip-1", start_time: "05:00:00", end_time: "06:20:00", bus_id: 1 },
+    { id: 2, route_id: 1, trip_name: "trip-2", start_time: "08:00:00", end_time: "09:20:00", bus_id: 2 },
+    { id: 3, route_id: 1, trip_name: "trip-3", start_time: "11:00:00", end_time: "12:20:00", bus_id: 3 },
+    { id: 4, route_id: 1, trip_name: "trip-4", start_time: "14:00:00", end_time: "15:20:00", bus_id: 1 },
+    { id: 5, route_id: 1, trip_name: "trip-5", start_time: "17:00:00", end_time: "18:20:00", bus_id: 2 },
+    { id: 6, route_id: 2, trip_name: "trip-6", start_time: "05:00:00", end_time: "06:20:00", bus_id: 4 },
+    { id: 7, route_id: 2, trip_name: "trip-7", start_time: "08:00:00", end_time: "09:20:00", bus_id: 5 },
+    { id: 8, route_id: 2, trip_name: "trip-8", start_time: "11:00:00", end_time: "12:20:00", bus_id: 4 },
+    { id: 9, route_id: 2, trip_name: "trip-9", start_time: "14:00:00", end_time: "15:20:00", bus_id: 5 },
+    { id: 10, route_id: 2, trip_name: "trip-10", start_time: "17:00:00", end_time: "18:20:00", bus_id: 4 },
+    { id: 11, route_id: 3, trip_name: "trip-11", start_time: "05:00:00", end_time: "06:40:00", bus_id: 6 },
+    { id: 12, route_id: 3, trip_name: "trip-12", start_time: "08:00:00", end_time: "09:40:00", bus_id: 7 },
+    { id: 13, route_id: 3, trip_name: "trip-13", start_time: "11:00:00", end_time: "12:40:00", bus_id: 6 },
+    { id: 14, route_id: 3, trip_name: "trip-14", start_time: "14:00:00", end_time: "15:40:00", bus_id: 7 },
+    { id: 15, route_id: 3, trip_name: "trip-15", start_time: "17:00:00", end_time: "18:40:00", bus_id: 6 },
+    { id: 16, route_id: 4, trip_name: "trip-16", start_time: "05:00:00", end_time: "06:20:00", bus_id: 8 },
+    { id: 17, route_id: 4, trip_name: "trip-17", start_time: "08:00:00", end_time: "09:20:00", bus_id: 8 },
+    { id: 18, route_id: 4, trip_name: "trip-18", start_time: "11:00:00", end_time: "12:20:00", bus_id: 8 },
+    { id: 19, route_id: 4, trip_name: "trip-19", start_time: "14:00:00", end_time: "15:20:00", bus_id: 8 },
+    { id: 20, route_id: 4, trip_name: "trip-20", start_time: "17:00:00", end_time: "18:20:00", bus_id: 8 },
+    { id: 21, route_id: 5, trip_name: "trip-21", start_time: "05:00:00", end_time: "06:00:00", bus_id: 9 },
+    { id: 22, route_id: 5, trip_name: "trip-22", start_time: "08:00:00", end_time: "09:00:00", bus_id: 10 },
+    { id: 23, route_id: 5, trip_name: "trip-23", start_time: "11:00:00", end_time: "12:00:00", bus_id: 9 },
+    { id: 24, route_id: 5, trip_name: "trip-24", start_time: "14:00:00", end_time: "15:00:00", bus_id: 10 },
+    { id: 25, route_id: 5, trip_name: "trip-25", start_time: "17:00:00", end_time: "18:00:00", bus_id: 9 }
 ];
 
 // Helper functions
@@ -151,8 +164,8 @@ async function seedRoutes() {
 
     for (const route of ROUTES_DATA) {
         await pool.query(
-            "INSERT INTO routes (id, name, start_city, end_city) VALUES ($1, $2, $3, $4);",
-            [route.id, route.name, route.start_city, route.end_city]
+            "INSERT INTO routes (id, route_number, name, start_city, end_city) VALUES ($1, $2, $3, $4, $5);",
+            [route.id, route.route_number, route.name, route.start_city, route.end_city]
         );
     }
 
@@ -191,8 +204,8 @@ async function seedUsers() {
     const userCount = 20;
     for (let i = 0; i < userCount; i++) {
         await pool.query(
-            "INSERT INTO users (device_id) VALUES ($1);",
-            [generateDeviceId()]
+            "INSERT INTO users (device_id, email, password_hash, username, role) VALUES ($1, $2, $3, $4, $5);",
+            [generateDeviceId(), `user${i}@example.com`, `dummy_hash`, `User${i}`, `user`]
         );
     }
 
@@ -204,8 +217,8 @@ async function seedTrips() {
 
     for (const trip of TRIPS_DATA) {
         await pool.query(
-            "INSERT INTO trips (id, route_id, trip_name, start_time, end_time) VALUES ($1, $2, $3, $4, $5);",
-            [trip.id, trip.route_id, trip.trip_name, trip.start_time, trip.end_time]
+            "INSERT INTO trips (id, route_id, trip_name, start_time, end_time, bus_id) VALUES ($1, $2, $3, $4, $5, $6);",
+            [trip.id, trip.route_id, trip.trip_name, trip.start_time, trip.end_time, trip.bus_id]
         );
     }
 
@@ -358,12 +371,13 @@ async function seedArrivals() {
             const values = parseCSVLine(line);
             if (values.length < 34) continue;
 
-            const busId = parseInt(values[0]);
-            const stopId = parseInt(values[1]);
+            // Safely map busId and stopId to our valid ranges (1-10 for buses, 1-25 for stops)
+            const safeBusId = (parseInt(values[0]) % 10) + 1;
+            const safeStopId = (parseInt(values[1]) % 25) + 1;
             const arrivalTime = parseInt(values[2]);
 
             // Skip invalid data
-            if (!busId || !stopId || !arrivalTime || busId > 10 || stopId > 20) {
+            if (!safeBusId || !safeStopId || !arrivalTime) {
                 skipCount++;
                 continue;
             }
@@ -410,7 +424,7 @@ async function seedArrivals() {
                 await pool.query(
                     `INSERT INTO arrivals (bus_id, stop_id, scheduled_time, delay_seconds, weather, traffic_level, event_nearby, arrived_at)
                      VALUES ($1, $2, $3, $4, $5, $6, $7, $8);`,
-                    [busId, stopId, scheduledTime, delaySeconds, weather, trafficLevel, false, arrivedAt]
+                    [safeBusId, safeStopId, scheduledTime, delaySeconds, weather, trafficLevel, false, arrivedAt]
                 );
                 insertCount++;
             } catch (err) {
@@ -438,8 +452,8 @@ async function seed() {
         await clearDatabase();
         await seedRoutes();
         await seedStops();
-        await seedTrips();          // New: seed trips before buses (for FK)
         await seedBuses();
+        await seedTrips();
         await seedUsers();
         await seedTripSchedules();  // New: seed trip schedules
         await seedSchedules();      // Legacy schedules (for backward compat)
