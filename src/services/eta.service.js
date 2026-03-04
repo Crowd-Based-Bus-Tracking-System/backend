@@ -279,7 +279,13 @@ class ETAFusionEngine {
         if (mlETA.mlPrediction && mlETA.confidence !== undefined) {
             const mlConfidence = mlETA.confidence;
 
-            const mlWeight = this.calculateMlWeight(mlConfidence);
+            let mlWeight = this.calculateMlWeight(mlConfidence);
+
+            const minutesSince = lastConfirmedStop.minutesSinceArrival || 0;
+
+            const mlAgeFactor = Math.exp(-minutesSince / 30);
+            mlWeight = mlWeight * mlAgeFactor;
+
             const rawScheduleWeight = this.calculateScheduleWeight(mlConfidence);
             const scheduleWeight = Math.min(rawScheduleWeight, 0.15);
 
@@ -293,7 +299,7 @@ class ETAFusionEngine {
 
             const ageFactor = Math.exp(-minutesSince / 15);
 
-            weights.historical = 0.85 * ageFactor; // Prefer historical for active mid-route buses
+            weights.historical = 0.85 * ageFactor;
             weights.schedule = 1 - weights.historical;
             weights.ml = 0;
         }
