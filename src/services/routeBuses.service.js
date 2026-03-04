@@ -2,6 +2,7 @@ import { getBusesByRoute } from "../models/bus.js";
 import { getBusStatus } from "../socket/emitters/bus-updates.js";
 import { getStopById } from "../models/stops.js";
 import { ETAFusionEngine } from "./eta.service.js";
+import distanceInMeters from "../utils/geo.js";
 
 const etaFusionEngine = new ETAFusionEngine();
 
@@ -35,20 +36,58 @@ export const getRouteBusesSortedByETA = async (routeId, targetStopId, location) 
                     };
                 }
 
+                let nextStopEtaResult = null;
+                if (status.estimatedPosition?.toStopId) {
+                    try {
+                        nextStopEtaResult = await etaFusionEngine.calculateFinalEta({
+                            bus: { busId: bus.id, routeId },
+                            targetStopId: status.estimatedPosition.toStopId,
+                            location
+                        });
+                    } catch (e) {
+                        console.error("Failed to calculate next stop ETA:", e);
+                    }
+                }
+
                 const nextStopObj = status.estimatedPosition?.toStopId
                     ? await getStopById(status.estimatedPosition.toStopId)
                     : null;
+
+                let calculatedSpeed = 0;
+                if (status.status !== "AT_TERMINUS" && status.lastConfirmedStop && status.estimatedPosition) {
+                    const lastStopObj = await getStopById(status.lastConfirmedStop.stopId);
+                    if (lastStopObj && status.estimatedPosition.lat) {
+                        const metersTraveled = distanceInMeters(
+                            parseFloat(lastStopObj.latitude),
+                            parseFloat(lastStopObj.longitude),
+                            status.estimatedPosition.lat,
+                            status.estimatedPosition.lng
+                        );
+                        const secondsElapsed = status.lastConfirmedStop.timeSinceArrival || 1;
+                        calculatedSpeed = Math.round((metersTraveled / secondsElapsed) * 3.6);
+                    }
+                }
+
+                if (calculatedSpeed > 100 || calculatedSpeed < 0) {
+                    calculatedSpeed = 40;
+                }
+
+                if (calculatedSpeed === 0 && status.status !== "AT_TERMINUS" && status.status !== "At_STOP") {
+                    calculatedSpeed = 15;
+                }
 
                 return {
                     busId: bus.id,
                     busNumber: bus.bus_number,
                     status: status.status,
+                    speed: calculatedSpeed,
                     next_stop_name: nextStopObj?.name || "Unknown",
                     lastConfirmedStop: status.lastConfirmedStop || null,
                     estimatedPosition: status.estimatedPosition || null,
                     eta: {
                         eta_seconds: etaResult.eta_seconds,
                         eta_minutes: etaResult.eta_minutes,
+                        next_stop_eta_minutes: nextStopEtaResult ? nextStopEtaResult.eta_minutes : 0,
                         arrival_time: etaResult.arrival_time,
                         confidence: etaResult.confidence,
                         methods_used: etaResult.methods_used,
@@ -62,7 +101,8 @@ export const getRouteBusesSortedByETA = async (routeId, targetStopId, location) 
                     busId: bus.id,
                     busNumber: bus.bus_number,
                     status: "ERROR",
-                    eta: { eta_seconds: Infinity, eta_minutes: Infinity }
+                    speed: 0,
+                    eta: { eta_seconds: Infinity, eta_minutes: Infinity, next_stop_eta_minutes: 0 }
                 };
             }
         })

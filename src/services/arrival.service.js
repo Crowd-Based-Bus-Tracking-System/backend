@@ -61,6 +61,30 @@ export const reportArrival = async (data) => {
 
         await increaseReporterStatsOnReport(user.id);
 
+        const io = getIO();
+        const { getStopById } = await import("../models/stops.js");
+        const stop = await getStopById(stopId);
+
+        const reportPayload = {
+            id: `rep_${Date.now()}_${user.id}`,
+            busId: busId,
+            stopId: stopId,
+            stopName: stop?.name || "Unknown Stop",
+            timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+            timestamp_ms: Date.now(),
+            upvotes: 1
+        };
+
+        try {
+            await redis.hset(`report:${reportPayload.id}`, reportPayload);
+            await redis.expire(`report:${reportPayload.id}`, 86400);
+            await redis.zadd(`bus:${busId}:global_reports`, Date.now(), reportPayload.id);
+
+            io.to(`route:${routeId}`).emit("bus:new_report", reportPayload);
+        } catch (e) {
+            console.warn("Failed to cache or broadcast report:", e.message);
+        }
+
         const mlResult = await validateArrivalWithML(data, reportKey);
 
         if (mlResult.mlConfirmed !== null) {
@@ -167,5 +191,34 @@ export const reportArrival = async (data) => {
     } catch (error) {
         console.log(error);
         return { confirmed: false }
+    }
+}
+
+export const getReports = async (busId) => {
+    try {
+        const reportIds = await redis.zrevrange(`bus:${busId}:global_reports`, 0, 10);
+        const reports = [];
+        for (const id of reportIds) {
+            const r = await redis.hgetall(`report:${id}`);
+            if (r && Object.keys(r).length > 0) {
+                reports.push({ ...r, upvotes: parseInt(r.upvotes || 1) });
+            }
+        }
+        return reports;
+    } catch (e) {
+        console.error("Failed to get reports:", e);
+        return [];
+    }
+}
+
+export const upvoteReport = async (reportId, routeId) => {
+    try {
+        const newUpvotes = await redis.hincrby(`report:${reportId}`, "upvotes", 1);
+        const io = getIO();
+        io.to(`route:${routeId}`).emit("bus:report_upvote", { reportId, upvotes: newUpvotes });
+        return { success: true, upvotes: newUpvotes };
+    } catch (e) {
+        console.error("Failed to upvote report:", e);
+        return { success: false };
     }
 }
