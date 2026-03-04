@@ -3,6 +3,7 @@ import { getBusStatus } from "../socket/emitters/bus-updates.js";
 import { getStopById } from "../models/stops.js";
 import { ETAFusionEngine } from "./eta.service.js";
 import distanceInMeters from "../utils/geo.js";
+import { getCurrentOccupancy } from "./occupancy.service.js";
 
 const etaFusionEngine = new ETAFusionEngine();
 
@@ -17,6 +18,7 @@ export const getRouteBusesSortedByETA = async (routeId, targetStopId, location) 
         buses.map(async (bus) => {
             try {
                 const status = await getBusStatus(bus.id, routeId);
+                const occupancyData = await getCurrentOccupancy(bus.id);
 
                 let etaResult;
                 if (targetStopId) {
@@ -82,6 +84,7 @@ export const getRouteBusesSortedByETA = async (routeId, targetStopId, location) 
                     status: status.status,
                     isSimulated: status.isSimulated || false,
                     speed: calculatedSpeed,
+                    occupancyLevel: occupancyData?.level || 1,
                     next_stop_name: nextStopObj?.name || "Unknown",
                     lastConfirmedStop: status.lastConfirmedStop || null,
                     estimatedPosition: status.estimatedPosition || null,
