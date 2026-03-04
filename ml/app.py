@@ -1,12 +1,15 @@
 from fastapi import FastAPI
 from training.train_arrival import train_arrival_models
 from training.train_eta import train_eta_models
+from training.train_occupancy import train_occupancy_models
 from inference.predict_arrival import predict_arrival as predict_arrival_inference
 from inference.predict_eta import predict_eta as predict_eta_inference
+from inference.predict_occupancy import predict_occupancy as predict_occupancy_inference
 from pydantic import BaseModel
 import pandas as pd
 from schemas.arrival_features import ArrivalFeatures
 from schemas.eta_features import ETAFeatures
+from schemas.occupancy_features import OccupancyFeatures
 
 app = FastAPI()
 
@@ -59,4 +62,28 @@ def store_eta(data: dict):
         return {"status": "stored"}
     except Exception as e:
         print(f"Error storing ETA data: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/train-occupancy")
+def train_occupancy():
+    metrics = train_occupancy_models()
+    return metrics
+
+@app.post("/predict-occupancy")
+def predict_occupancy_endpoint(data: OccupancyFeatures):
+    result = predict_occupancy_inference(data)
+    return result
+
+@app.post("/store-occupancy")
+def store_occupancy(data: dict):
+    try:
+        validated = OccupancyFeatures(**data)
+        df = pd.DataFrame([validated.dict()])
+        import os
+        os.makedirs("data/occupancy", exist_ok=True)
+        df.to_csv("data/occupancy/occupancy.csv", mode="a", header=False, index=False)
+        return {"status": "stored"}
+    except Exception as e:
+        print(f"Error storing occupancy data: {e}")
         return {"status": "error", "message": str(e)}
