@@ -1,6 +1,7 @@
 import pool from "../config/db.js";
 import { getRouteStops } from "../models/route.js";
 import { getBusesByRoute } from "../models/bus.js";
+import redis from "../config/redis.js";
 
 export const getRoutes = async (req, res) => {
     try {
@@ -14,6 +15,31 @@ export const getRoutes = async (req, res) => {
 
             const buses = await getBusesByRoute(route.id);
 
+            const enrichedBuses = await Promise.all(buses.map(async (b) => {
+                const lastStop = await redis.get(`bus:${b.id}:last_stop`);
+                const lastArrivalTime = await redis.get(`bus:${b.id}:last_arrival_time`);
+
+                let formattedUpdate = "Just now";
+                if (lastArrivalTime) {
+                    const timeMs = parseInt(lastArrivalTime) * 1000;
+                    formattedUpdate = new Date(timeMs).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                }
+
+                return {
+                    id: `b${b.id}`,
+                    dbId: b.id,
+                    plateNumber: b.bus_number,
+                    status: b.status.toLowerCase(),
+                    lastUpdated: formattedUpdate,
+                    occupancy: "low",
+                    lat: 0,
+                    lng: 0,
+                    speed: 0,
+                    heading: 0,
+                    hasConfirmedStop: lastStop !== null
+                };
+            }));
+
             return {
                 id: `route-${route.id}`,
                 dbId: route.id,
@@ -21,7 +47,6 @@ export const getRoutes = async (req, res) => {
                 name: route.name,
                 from: route.start_city,
                 to: route.end_city,
-                // the frontend generates static colors, we'll assign randomly or uniformly
                 color: "#10b981",
                 stops: stopsResult.rows.map(s => ({
                     id: `s${s.db_id}`,
@@ -30,18 +55,7 @@ export const getRoutes = async (req, res) => {
                     lat: s.lat,
                     lng: s.lng
                 })),
-                buses: buses.map(b => ({
-                    id: `b${b.id}`,
-                    dbId: b.id,
-                    plateNumber: b.bus_number,
-                    status: b.status.toLowerCase(),
-                    lastUpdated: "Just now", // In real system, query from redis
-                    occupancy: "low",
-                    lat: 0,
-                    lng: 0,
-                    speed: 0,
-                    heading: 0
-                }))
+                buses: enrichedBuses
             };
         }));
 
@@ -56,9 +70,13 @@ export const getRouteTimetable = async (req, res) => {
     try {
         const routeDbId = req.params.routeId.replace('route-', '');
 
-        // 1. Fetch all trips for this route
-        const tripsResult = await pool.query(
-            "SELECT id, trip_name, start_time, end_time, day_type, bus_id, status FROM trips WHERE route_id = $1 ORDER BY start_time",
+        const shedResult = await pool.query(
+            `SELECT s.id, s.route_id, s.stop_id, s.sheduled_arrival_time, s.day_type, 
+             st.sequence, st.name as stop_name
+             FROM shedules s
+             JOIN stops st ON s.stop_id = st.id
+             WHERE s.route_id = $1
+             ORDER BY s.day_type, st.sequence, s.sheduled_arrival_time`,
             [routeDbId]
         );
 
@@ -68,31 +86,35 @@ export const getRouteTimetable = async (req, res) => {
             weekend: []
         };
 
-        for (const trip of tripsResult.rows) {
-            // Get schedules for this trip
-            const schedResult = await pool.query(
-                "SELECT stop_id, scheduled_arrival, sequence FROM trip_schedules WHERE trip_id = $1 ORDER BY sequence",
-                [trip.id]
-            );
+        const formatTime = (t) => t ? t.substring(0, 5) : '';
 
-            // Format time Helper: HH:MM:SS to HH:MM
-            const formatTime = (t) => t ? t.substring(0, 5) : '';
+        const schedulesArray = shedResult.rows;
+        const dayGroups = {
+            'WEEKDAY': [],
+            'WEEKEND': []
+        };
 
-            const stopSchedules = schedResult.rows.map(s => ({
+        const uniqueDayTypes = [...new Set(schedulesArray.map(s => s.day_type))];
+
+        for (const day of uniqueDayTypes) {
+            const daySchedules = schedulesArray.filter(s => s.day_type === day);
+
+            const stopSchedules = daySchedules.map(s => ({
                 stopId: `s${s.stop_id}`,
-                arrivalTime: formatTime(s.scheduled_arrival)
+                stopName: s.stop_name,
+                arrivalTime: formatTime(s.sheduled_arrival_time)
             }));
 
             const entry = {
-                tripId: `trip-${trip.id}`,
-                busId: `b${trip.bus_id}`,
-                departureTime: formatTime(trip.start_time),
-                arrivalTime: formatTime(trip.end_time),
-                busType: "normal", // For simplicity everything is normal
+                tripId: `trip-${day.toLowerCase()}-all`,
+                busId: `b-generic`,
+                departureTime: formatTime(daySchedules[0]?.sheduled_arrival_time) || "06:00",
+                arrivalTime: formatTime(daySchedules[daySchedules.length - 1]?.sheduled_arrival_time) || "20:00",
+                busType: "normal",
                 stopSchedules
             };
 
-            if (trip.day_type === 'WEEKEND') {
+            if (day === 'WEEKEND') {
                 timetable.weekend.push(entry);
             } else {
                 timetable.weekday.push(entry);

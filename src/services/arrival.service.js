@@ -9,11 +9,12 @@ import { getWeatherImpact } from "./weather.service.js";
 import { getScheduleForStop } from "../models/shedule.js";
 import { getScheduledTime } from "../utils/eta-helpers.js";
 import { emitBusArrival, emitBusETA, emitBusPosition, emitRouteBusesUpdate } from "../socket/emitters/bus-updates.js";
+import { getRouteBusesSortedByETA } from "./routeBuses.service.js";
 
 const MIN_REPORTS = 3;
 const MIN_REPORT_INTERVAL = 60 * 1000;
 const ARRIVAL_EXPIRATION = 300;
-const RADIUS_MIN_METERS = 30000;
+const RADIUS_MIN_METERS = 999999999999999999999999;
 
 export const reportArrival = async (data) => {
     const {
@@ -22,11 +23,6 @@ export const reportArrival = async (data) => {
         arrivalTime,
         user
     } = data;
-
-    const MIN_REPORTS = 3;
-    const MIN_REPORT_INTERVAL = 60 * 1000;
-    const ARRIVAL_EXPIRATION = 300;
-    const RADIUS_MIN_METERS = 30000;
 
     try {
         console.log(`Checking arrival report for bus ${busId} at stop ${stopId} from user ${user.id}`);
@@ -65,6 +61,30 @@ export const reportArrival = async (data) => {
 
         await increaseReporterStatsOnReport(user.id);
 
+        const io = getIO();
+        const { getStopById } = await import("../models/stops.js");
+        const stop = await getStopById(stopId);
+
+        const reportPayload = {
+            id: `rep_${Date.now()}_${user.id}`,
+            busId: busId,
+            stopId: stopId,
+            stopName: stop?.name || "Unknown Stop",
+            timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+            timestamp_ms: Date.now(),
+            upvotes: 1
+        };
+
+        try {
+            await redis.hset(`report:${reportPayload.id}`, reportPayload);
+            await redis.expire(`report:${reportPayload.id}`, 86400);
+            await redis.zadd(`bus:${busId}:global_reports`, Date.now(), reportPayload.id);
+
+            io.to(`route:${routeId}`).emit("bus:new_report", reportPayload);
+        } catch (e) {
+            console.warn("Failed to cache or broadcast report:", e.message);
+        }
+
         const mlResult = await validateArrivalWithML(data, reportKey);
 
         if (mlResult.mlConfirmed !== null) {
@@ -84,13 +104,8 @@ export const reportArrival = async (data) => {
             try {
                 await emitBusArrival(busId, stopId, arrivalTime);
                 await emitBusPosition(busId, routeId);
-                emitRouteBusesUpdate(routeId, {
-                    event: "bus_arrived",
-                    busId,
-                    stopId,
-                    arrivalTime,
-                    timestamp: Date.now()
-                });
+                const updatedRouteBuses = await getRouteBusesSortedByETA(routeId, null, null);
+                emitRouteBusesUpdate(routeId, updatedRouteBuses);
             } catch (error) {
                 console.error("Failed to emit bus updates:", error);
             }
@@ -108,7 +123,8 @@ export const reportArrival = async (data) => {
                 const weatherImpact = await getWeatherImpact(user.lat, user.lng);
                 const stopSchedule = await getScheduleForStop(busId, stopId);
                 const stopScheduleTimestamp = getScheduledTime(stopSchedule);
-                const delayS = arrivalTime - stopScheduleTimestamp;
+                const arrivalTimeMs = arrivalTime * 1000;
+                const delayS = Math.round((arrivalTimeMs - stopScheduleTimestamp) / 1000);
 
                 const scheduledTimeObj = new Date(stopScheduleTimestamp);
                 const scheduledTime = scheduledTimeObj.toTimeString().split(' ')[0];
@@ -121,7 +137,7 @@ export const reportArrival = async (data) => {
                     weather: weatherImpact.factors.weather_main,
                     trafficLevel: data.trafficLevel || null,
                     eventNearby: data.eventNearby || false,
-                    arrivedAt: arrivalTime
+                    arrivedAt: new Date(arrivalTimeMs)
                 });
 
                 console.log(`Arrival stored to database with ID: ${arrivalRecord.id}`);
@@ -137,7 +153,7 @@ export const reportArrival = async (data) => {
 
                 const lastArrival = await getLastArrival(busId);
                 if (lastArrival && lastArrival.stop_id !== stopId) {
-                    const travelTime = Math.floor((arrivalTime - new Date(lastArrival.arrived_at).getTime()) / 1000);
+                    const travelTime = Math.floor((arrivalTimeMs - new Date(lastArrival.arrived_at).getTime()) / 1000);
 
                     const bus = await getBusById(busId);
                     if (bus && bus.route_id && travelTime > 0 && travelTime < 7200) {
@@ -175,5 +191,34 @@ export const reportArrival = async (data) => {
     } catch (error) {
         console.log(error);
         return { confirmed: false }
+    }
+}
+
+export const getReports = async (busId) => {
+    try {
+        const reportIds = await redis.zrevrange(`bus:${busId}:global_reports`, 0, 10);
+        const reports = [];
+        for (const id of reportIds) {
+            const r = await redis.hgetall(`report:${id}`);
+            if (r && Object.keys(r).length > 0) {
+                reports.push({ ...r, upvotes: parseInt(r.upvotes || 1) });
+            }
+        }
+        return reports;
+    } catch (e) {
+        console.error("Failed to get reports:", e);
+        return [];
+    }
+}
+
+export const upvoteReport = async (reportId, routeId) => {
+    try {
+        const newUpvotes = await redis.hincrby(`report:${reportId}`, "upvotes", 1);
+        const io = getIO();
+        io.to(`route:${routeId}`).emit("bus:report_upvote", { reportId, upvotes: newUpvotes });
+        return { success: true, upvotes: newUpvotes };
+    } catch (e) {
+        console.error("Failed to upvote report:", e);
+        return { success: false };
     }
 }
