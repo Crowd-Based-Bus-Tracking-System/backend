@@ -27,14 +27,14 @@ const buildFeatures = async (data, reportKey) => {
         user
     } = data;
 
-    const now = Date.now();
+    const now = Math.floor(Date.now() / 1000);
     const members = await redis.zrange(reportKey, 0, -1, "WITHSCORES");
     const reporters = parseMembersWithScores(members);
 
     const firstTs = reporters.length ? reporters[0].ts : arrivalTime;
     const lastTs = reporters.length ? reporters[reporters.length - 1].ts : arrivalTime;
 
-    const spanS = (lastTs - firstTs) / 1000;
+    const spanS = lastTs - firstTs;
 
     const reporterPositions = await getReporterPositions(reporters.map(r => r.userId));
     const distances = [];
@@ -52,20 +52,24 @@ const buildFeatures = async (data, reportKey) => {
         const pos = reporterPositions.find(p => p.userId === reporter.userId);
         if (pos) {
             const distance = distanceInMeters(pos.lat, pos.lng, user.lat, user.lng);
-            if (distance <= RADIUS) withinCount++;
-            distances.push(distance);
-            reporterDistanceMap[reporter.userId] = distance;
+            if (distance <= RADIUS) {
+                withinCount++;
+                distances.push(distance);
+                reporterDistanceMap[reporter.userId] = distance;
+                reporterAccuracyScores.push(accuracyMap[reporter.userId] ?? 0.5);
+            } else {
+                reporterDistanceMap[reporter.userId] = null;
+            }
         } else {
             reporterDistanceMap[reporter.userId] = null;
         }
-        reporterAccuracyScores.push(accuracyMap[reporter.userId] ?? 0.5);
     }
 
     const reportCount = reporters.length;
     const uniqueReporters = new Set(reporters.map((r) => r.userId)).size;
     const reportsPerMinute = spanS > 0 ? (reportCount / (spanS / 60)) : reportCount;
-    const timeSinceLastReportS = msToSec(now - lastTs);
-    const timeSinceFirstReportS = msToSec(now - firstTs);
+    const timeSinceLastReportS = Math.max(0, now - lastTs);
+    const timeSinceFirstReportS = Math.max(0, now - firstTs);
 
     const validDistances = distances.filter((d) => d != null);
     const distanceMean = mean(validDistances);
@@ -73,22 +77,22 @@ const buildFeatures = async (data, reportKey) => {
     const distanceStd = stddev(validDistances);
     const pctWithinRadius = reporters.length ? withinCount / reporters.length : 0;
 
-    const accMean = mean(reporterAccuracyScores);
+    const accMean = mean(reporterAccuracyScores) || 0;
     const weightSum = reporterAccuracyScores.reduce((s, x) => s + (x || 0), 0) || 1;
     const weightedDistMean = validDistances.length
         ? validDistances.reduce((s, d, i) => s + d * (reporterAccuracyScores[i] || 0), 0) / weightSum
-        : null;
+        : 0; // null replaced with 0 for ML input
 
     const prevArrivalKey = `bus:${busId}:lastlast_arrival_time`;
     const prevArrivalKeyTsStr = await redis.get(prevArrivalKey);
     const prevArrivalKeyTs = prevArrivalKeyTsStr ? Number(prevArrivalKeyTsStr) : null;
-    const timeSinceLastArrivalS = prevArrivalKeyTs ? msToSec(now - prevArrivalKeyTs) : null;
+    const timeSinceLastArrivalS = prevArrivalKeyTs ? Math.max(0, now - prevArrivalKeyTs) : null;
 
     const reporterTimestamps = reporters.map((r) => r.ts);
     const tMean = mean(reporterTimestamps);
     const tStd = stddev(reporterTimestamps);
 
-    const arrivalDate = new Date(arrivalTime);
+    const arrivalDate = new Date(arrivalTime * 1000);
     const hourOfDay = arrivalDate.getHours();
     const dayOfWeek = arrivalDate.getDay();
     const isWeekend = dayOfWeek === 0 || dayOfWeek === 6 ? 1 : 0;
@@ -114,16 +118,16 @@ const buildFeatures = async (data, reportKey) => {
         reports_per_minute: reportsPerMinute,
         time_since_last_report_s: timeSinceLastReportS,
         time_since_first_report_s: timeSinceFirstReportS,
-        distance_mean: distanceMean,
-        distance_median: distanceMedian,
-        distance_std: distanceStd,
+        distance_mean: distanceMean || 0,
+        distance_median: distanceMedian || 0,
+        distance_std: distanceStd || 0,
         pct_within_radius: pctWithinRadius,
         acc_mean: accMean,
         weighted_dist_mean: weightedDistMean,
-        prev_arrival_time: prevArrivalKeyTs,
-        time_since_last_arrival_s: timeSinceLastArrivalS,
-        t_mean: tMean,
-        t_std: tStd,
+        prev_arrival_time: prevArrivalKeyTs || 0,
+        time_since_last_arrival_s: timeSinceLastArrivalS || 0,
+        t_mean: tMean || arrivalTime,
+        t_std: tStd || 0,
         hour_of_day: hourOfDay,
         day_of_week: dayOfWeek,
         is_weekend: isWeekend,

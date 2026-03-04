@@ -11,10 +11,11 @@ class BusProgressionService {
             return null;
         }
 
+        const arrivedAtMs = parseInt(lastArrivalTime) * 1000;
         return {
             stopId: parseInt(lastStopId),
-            arrivedAt: parseInt(lastArrivalTime),
-            minutesSinceArrival: (Date.now() - parseInt(lastArrivalTime)) / 60000
+            arrivedAt: arrivedAtMs,
+            minutesSinceArrival: (Date.now() - arrivedAtMs) / 60000
         };
     }
 

@@ -9,11 +9,12 @@ import { getWeatherImpact } from "./weather.service.js";
 import { getScheduleForStop } from "../models/shedule.js";
 import { getScheduledTime } from "../utils/eta-helpers.js";
 import { emitBusArrival, emitBusETA, emitBusPosition, emitRouteBusesUpdate } from "../socket/emitters/bus-updates.js";
+import { getRouteBusesSortedByETA } from "./routeBuses.service.js";
 
 const MIN_REPORTS = 3;
 const MIN_REPORT_INTERVAL = 60 * 1000;
 const ARRIVAL_EXPIRATION = 300;
-const RADIUS_MIN_METERS = 30000;
+const RADIUS_MIN_METERS = 999999999999999999999999;
 
 export const reportArrival = async (data) => {
     const {
@@ -22,11 +23,6 @@ export const reportArrival = async (data) => {
         arrivalTime,
         user
     } = data;
-
-    const MIN_REPORTS = 3;
-    const MIN_REPORT_INTERVAL = 60 * 1000;
-    const ARRIVAL_EXPIRATION = 300;
-    const RADIUS_MIN_METERS = 30000;
 
     try {
         console.log(`Checking arrival report for bus ${busId} at stop ${stopId} from user ${user.id}`);
@@ -84,13 +80,8 @@ export const reportArrival = async (data) => {
             try {
                 await emitBusArrival(busId, stopId, arrivalTime);
                 await emitBusPosition(busId, routeId);
-                emitRouteBusesUpdate(routeId, {
-                    event: "bus_arrived",
-                    busId,
-                    stopId,
-                    arrivalTime,
-                    timestamp: Date.now()
-                });
+                const updatedRouteBuses = await getRouteBusesSortedByETA(routeId, null, null);
+                emitRouteBusesUpdate(routeId, updatedRouteBuses);
             } catch (error) {
                 console.error("Failed to emit bus updates:", error);
             }
@@ -108,7 +99,8 @@ export const reportArrival = async (data) => {
                 const weatherImpact = await getWeatherImpact(user.lat, user.lng);
                 const stopSchedule = await getScheduleForStop(busId, stopId);
                 const stopScheduleTimestamp = getScheduledTime(stopSchedule);
-                const delayS = arrivalTime - stopScheduleTimestamp;
+                const arrivalTimeMs = arrivalTime * 1000;
+                const delayS = Math.round((arrivalTimeMs - stopScheduleTimestamp) / 1000);
 
                 const scheduledTimeObj = new Date(stopScheduleTimestamp);
                 const scheduledTime = scheduledTimeObj.toTimeString().split(' ')[0];
@@ -121,7 +113,7 @@ export const reportArrival = async (data) => {
                     weather: weatherImpact.factors.weather_main,
                     trafficLevel: data.trafficLevel || null,
                     eventNearby: data.eventNearby || false,
-                    arrivedAt: arrivalTime
+                    arrivedAt: new Date(arrivalTimeMs)
                 });
 
                 console.log(`Arrival stored to database with ID: ${arrivalRecord.id}`);
@@ -137,7 +129,7 @@ export const reportArrival = async (data) => {
 
                 const lastArrival = await getLastArrival(busId);
                 if (lastArrival && lastArrival.stop_id !== stopId) {
-                    const travelTime = Math.floor((arrivalTime - new Date(lastArrival.arrived_at).getTime()) / 1000);
+                    const travelTime = Math.floor((arrivalTimeMs - new Date(lastArrival.arrived_at).getTime()) / 1000);
 
                     const bus = await getBusById(busId);
                     if (bus && bus.route_id && travelTime > 0 && travelTime < 7200) {

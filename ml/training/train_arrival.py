@@ -12,7 +12,6 @@ import os
 import sys
 from pydantic import ValidationError
 
-# Add parent directory to path for imports
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(SCRIPT_DIR, '..'))
 
@@ -24,6 +23,7 @@ DATA_PATH = os.path.join(SCRIPT_DIR, "..", "data", "arrivals", "arrivals.csv")
 def train_arrival_models(data_path=DATA_PATH):
     print(f"\nLoading data from: {data_path}")
     df = pd.read_csv(data_path)
+    df = df.fillna(0.0)
 
     print("\nValidating features with Pydantic schema...")
     validated_data = []
@@ -39,9 +39,9 @@ def train_arrival_models(data_path=DATA_PATH):
                 raise ValueError(f"Row {idx}: Missing target column '{TARGET_COLUMN}'")
             
             arrival_features = ArrivalFeatures(**row_dict)
-           
-            validated_data.append(arrival_features.model_dump())
-            target_values.append(row_dict[TARGET_COLUMN])
+            valid_row = arrival_features.model_dump()
+            valid_row[TARGET_COLUMN] = row_dict[TARGET_COLUMN]
+            validated_data.append(valid_row)
             
         except ValidationError as e:
             validation_errors += 1
@@ -55,7 +55,6 @@ def train_arrival_models(data_path=DATA_PATH):
         print(f"All {len(validated_data)} rows validated successfully")
     
     df = pd.DataFrame(validated_data)
-    df[TARGET_COLUMN] = target_values
     
     FEATURE_COLUMNS = [
         field for field in ArrivalFeatures.model_fields

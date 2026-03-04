@@ -1,5 +1,6 @@
 import { getBusesByRoute } from "../models/bus.js";
 import { getBusStatus } from "../socket/emitters/bus-updates.js";
+import { getStopById } from "../models/stops.js";
 import { ETAFusionEngine } from "./eta.service.js";
 
 const etaFusionEngine = new ETAFusionEngine();
@@ -16,16 +17,33 @@ export const getRouteBusesSortedByETA = async (routeId, targetStopId, location) 
             try {
                 const status = await getBusStatus(bus.id, routeId);
 
-                const etaResult = await etaFusionEngine.calculateFinalEta({
-                    bus: { busId: bus.id, routeId },
-                    targetStopId,
-                    location
-                });
+                let etaResult;
+                if (targetStopId) {
+                    etaResult = await etaFusionEngine.calculateFinalEta({
+                        bus: { busId: bus.id, routeId },
+                        targetStopId,
+                        location
+                    });
+                } else {
+                    etaResult = {
+                        eta_seconds: Infinity,
+                        eta_minutes: Infinity,
+                        arrival_time: null,
+                        confidence: 0,
+                        methods_used: [],
+                        uncertainty_range: { min: Infinity, max: Infinity }
+                    };
+                }
+
+                const nextStopObj = status.estimatedPosition?.toStopId
+                    ? await getStopById(status.estimatedPosition.toStopId)
+                    : null;
 
                 return {
                     busId: bus.id,
                     busNumber: bus.bus_number,
                     status: status.status,
+                    next_stop_name: nextStopObj?.name || "Unknown",
                     lastConfirmedStop: status.lastConfirmedStop || null,
                     estimatedPosition: status.estimatedPosition || null,
                     eta: {
@@ -34,7 +52,8 @@ export const getRouteBusesSortedByETA = async (routeId, targetStopId, location) 
                         arrival_time: etaResult.arrival_time,
                         confidence: etaResult.confidence,
                         methods_used: etaResult.methods_used,
-                        uncertainty_range: etaResult.uncertainty_range
+                        uncertainty_range: etaResult.uncertainty_range,
+                        is_passed: etaResult.is_passed || false
                     }
                 };
             } catch (error) {
@@ -50,7 +69,7 @@ export const getRouteBusesSortedByETA = async (routeId, targetStopId, location) 
     );
 
     const resolvedBuses = busETAs
-        .filter(r => r.status === "fulfilled")
+        .filter(r => r.status === "fulfilled" && !r.value.eta.is_passed)
         .map(r => r.value)
         .sort((a, b) => a.eta.eta_seconds - b.eta.eta_seconds);
 
