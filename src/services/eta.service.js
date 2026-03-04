@@ -99,11 +99,27 @@ class ETAFusionEngine {
 
         const lastConfirmedStop = await this.baseEtaService.busProgressionService.getLastConfirmedStop(busId);
 
-        const scheduleBasedETA = await this.baseEtaService.calculateScheduleBasedETA(
+        const historicalETA = await this.baseEtaService.calculateHistoricalETA(
             busId,
             targetStopId
         );
-        const historicalETA = await this.baseEtaService.calculateHistoricalETA(
+
+        if (historicalETA.method === "already_passed") {
+            return {
+                eta_seconds: 0,
+                eta_minutes: 0,
+                arrival_time: null,
+                confidence: 1,
+                freshness_minutes: lastConfirmedStop?.minutesSinceArrival || null,
+                last_confirmed_stop: lastConfirmedStop?.stopId || null,
+                methods_used: [],
+                weights: {},
+                uncertainty_range: {},
+                is_passed: true
+            };
+        }
+
+        const scheduleBasedETA = await this.baseEtaService.calculateScheduleBasedETA(
             busId,
             targetStopId
         );
@@ -174,7 +190,7 @@ class ETAFusionEngine {
             console.warn("ETA Redis store error:", e.message);
         }
 
-        return {
+        const finalResult = {
             eta_seconds: Math.round(finalETA),
             eta_minutes: Math.round(finalETA / 60),
             arrival_time: new Date(Date.now() + finalETA * 1000),
@@ -184,8 +200,11 @@ class ETAFusionEngine {
             methods_used: methods,
             weights: weights,
             uncertainty_range: uncertaintyRange,
-
         };
+
+        console.log(`Final ETA Result for Bus ${busId} to Stop ${targetStopId}:`, JSON.stringify(finalResult, null, 2));
+
+        return finalResult;
     }
 
 

@@ -1,0 +1,87 @@
+import urllib.request
+import json
+
+payload = {
+  "bus_id": 10,
+  "target_stop_id": 24,
+  "route_id": 5,
+  "prediction_made_at": 1772583840179,
+  "scheduled_arrival_time": 1772586000000,
+  "seconds_until_scheduled": 1933.898,
+  "current_delay_seconds": 0,
+  "delay_at_last_stop": 0,
+  "avg_delay_this_route_today": 0,
+  "avg_delay_same_hour": 0,
+  "schedule_adherence_score": 1,
+  "delay_trend_last_3_stops": 165,
+  "is_delay_accelerating": 1,
+  "delay_per_stop_rate": 82.5,
+  "stops_remaining": 3,
+  "pct_route_completed": 0,
+  "distance_remaining_km": 1.5,
+  "total_segment_time_remaining": 2238,
+  "avg_segment_time_remaining": 746,
+  "stddev_segment_time": 335.1696088052535,
+  "min_segment_time": 300,
+  "max_segment_time": 1108,
+  "segment_time_variance": 112338.66666666667,
+  "minutes_since_last_checkpoint": None,
+  "checkpoint_freshness_score": 0,
+  "checkpoint_age_penalty": 2,
+  "has_recent_checkpoint": 0,
+  "stops_since_last_checkpoint": 0,
+  "time_to_next_expected_report": None,
+  "checkpoint_reliability_score": 0.5,
+  "historical_delay_avg": 0,
+  "historical_delay_p50": 0,
+  "historical_delay_p90": 0,
+  "same_day_hour_avg_delay": 0,
+  "recent_24h_performance": 0.5,
+  "recent_7d_performance": 0.5,
+  "route_punctuality_score": 0.5,
+  "historical_completion_rate": 0.9,
+  "typical_delay_this_stop": 0,
+  "historical_sample_count": 0,
+  "hour_of_day": 5,
+  "day_of_week": 3,
+  "is_weekend": 0,
+  "is_rush_hour": 0,
+  "is_peak_period": 0,
+  "minutes_into_rush_hour": 0,
+  "temperature": 22.18,
+  "rain_1h": 0,
+  "snow_1h": 0,
+  "weather_condition_encoded": 0,
+  "visibility": 10000,
+  "wind_speed": 2.56,
+  "humidity": 90,
+  "weather_delay_multiplier": 1,
+  "traffic_level_encoded": 0,
+  "is_holiday": 0,
+  "is_special_event": 0,
+  "weather_clear": 1,
+  "weather_rain": 0,
+  "weather_snow": 0,
+  "weather_fog": 0,
+  "weather_clouds": 0,
+  "weather_thunderstorm": 0,
+  "weather_unknown": 0,
+  "reporters_at_target_stop": 0,
+  "avg_reporter_accuracy_target": 0.5,
+  "recent_report_density": 0,
+  "report_consensus_strength": 0,
+  "has_high_quality_reporter": 0,
+  "reporter_cluster_tightness": 0
+}
+
+req = urllib.request.Request(
+    "http://localhost:8000/predict-eta", 
+    data=json.dumps(payload).encode('utf-8'),
+    headers={"Content-Type": "application/json"}
+)
+
+try:
+    with urllib.request.urlopen(req) as resp:
+        print(resp.read().decode('utf-8'))
+except urllib.error.HTTPError as e:
+    print(f"HTTP Error {e.code}: {e.read().decode('utf-8')}")

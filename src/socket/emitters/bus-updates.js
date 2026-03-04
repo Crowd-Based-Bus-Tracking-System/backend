@@ -1,6 +1,6 @@
 import { getIO } from "../index.js";
 import redis from "../../config/redis.js"
-import { getStopById } from "../../models/stops.js";
+import { getStopById, getRouteStops } from "../../models/stops.js";
 import { getSegmentTime } from "../../utils/eta-helpers.js";
 
 
@@ -12,17 +12,56 @@ export const getBusStatus = async (busId, routeId) => {
         return { busId, status: "UNKNOWN", message: "No recent data" };
     }
 
-    const lastStop = await getStopById(lastStopId);
-    const timeSinceLastArrival = Date.now() - parseInt(lastArrivalTime);
-    const nextStopId = parseInt(lastStopId + 1);
+    const routeStops = await getRouteStops(routeId);
 
-    const expectedSegmentTime = await getSegmentTime(
-        parseInt(lastStopId),
-        nextStopId,
-        routeId,
-    ) * 1000;
+    const lastStopIndex = routeStops.findIndex(s => s.id === parseInt(lastStopId));
 
-    const segmentProgress = Math.min(1, timeSinceLastArrival / expectedSegmentTime);
+    if (lastStopIndex === -1) {
+        return { busId, status: "UNKNOWN", message: "Last stop not found in route" };
+    }
+
+    const lastStop = routeStops[lastStopIndex];
+    const lastArrivalTimeMs = parseInt(lastArrivalTime) * 1000;
+    const timeSinceLastArrival = Date.now() - lastArrivalTimeMs;
+
+    let nextStopId = null;
+    let expectedSegmentTime = 0;
+    let nextStop = null;
+
+    if (lastStopIndex + 1 < routeStops.length) {
+        nextStop = routeStops[lastStopIndex + 1];
+        nextStopId = nextStop.id;
+        expectedSegmentTime = await getSegmentTime(
+            parseInt(lastStopId),
+            nextStopId,
+            routeId,
+        ) * 1000;
+    } else {
+        return {
+            busId,
+            routeId,
+            status: "AT_TERMINUS",
+            lastConfirmedStop: {
+                stopId: parseInt(lastStopId),
+                stopName: lastStop?.name || "Unknown",
+                arrivedAt: lastArrivalTimeMs,
+                timeSinceArrival: Math.round(timeSinceLastArrival / 1000)
+            },
+            estimatedPosition: {
+                fromStopId: parseInt(lastStopId),
+                toStopId: parseInt(lastStopId),
+                segmentProgress: 1,
+                lat: parseFloat(lastStop.latitude),
+                lng: parseFloat(lastStop.longitude)
+            },
+            lastUpdate: Date.now()
+        };
+    }
+
+    const segmentProgress = expectedSegmentTime > 0 ? Math.min(1, timeSinceLastArrival / expectedSegmentTime) : 1;
+
+    const lat = parseFloat(lastStop.latitude) + (parseFloat(nextStop.latitude) - parseFloat(lastStop.latitude)) * segmentProgress;
+    const lng = parseFloat(lastStop.longitude) + (parseFloat(nextStop.longitude) - parseFloat(lastStop.longitude)) * segmentProgress;
 
     return {
         busId,
@@ -31,13 +70,15 @@ export const getBusStatus = async (busId, routeId) => {
         lastConfirmedStop: {
             stopId: parseInt(lastStopId),
             stopName: lastStop?.name || "Unknown",
-            arrivedAt: parseInt(lastArrivalTime),
+            arrivedAt: lastArrivalTimeMs,
             timeSinceArrival: Math.round(timeSinceLastArrival / 1000)
         },
         estimatedPosition: {
             fromStopId: parseInt(lastStopId),
             toStopId: nextStopId,
-            segmentProgress: Math.round(segmentProgress * 100) / 100
+            segmentProgress: Math.round(segmentProgress * 100) / 100,
+            lat,
+            lng
         },
         lastUpdate: Date.now()
     };
@@ -59,7 +100,7 @@ export const emitBusArrival = async (busId, stopId, arrivalTime) => {
 
 
 export const emitBusETA = async (busId, targetStopId, etaData) => {
-    const io = getIO;
+    const io = getIO();
 
     io.to(`bus:${busId}`).emit("bus:eta", {
         busId,
@@ -74,7 +115,7 @@ export const emitBusETA = async (busId, targetStopId, etaData) => {
 
 
 export const emitBusPosition = async (busId, routeId) => {
-    const io = getIO;
+    const io = getIO();
     const status = await getBusStatus(busId, routeId);
     io.to(`bus:${busId}`).emit("bus:position", status);
 }
@@ -82,5 +123,5 @@ export const emitBusPosition = async (busId, routeId) => {
 
 export const emitRouteBusesUpdate = (routeId, busesData) => {
     const io = getIO();
-    io.to(`route:${routeId}`).emit("route:buses:update", busesData);
+    io.to(`route:${routeId}`).emit("route:buses", busesData);
 }

@@ -1,7 +1,7 @@
 import pool from "../config/db.js";
 
 export const getScheduleForStop = async (busId, stopId) => {
-    const tripResult = await pool.query(`Review
+    const tripResult = await pool.query(`
         SELECT ts.scheduled_arrival_time as sheduled_arrival_time, t.trip_name
         FROM buses b
         JOIN trips t ON b.current_trip_id = t.id

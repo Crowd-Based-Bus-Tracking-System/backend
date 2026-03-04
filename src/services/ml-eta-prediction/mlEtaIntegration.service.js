@@ -53,6 +53,9 @@ export const predictETAWithML = async (data) => {
 
     } catch (error) {
         console.error("Error in ML ETA prediction:", error.message);
+        if (error.response?.data) {
+            console.error("ML ETA Validation Details:", JSON.stringify(error.response.data, null, 2));
+        }
         return {
             mlPrediction: null,
             confidence: 0,

@@ -9,15 +9,19 @@ random.seed(42)
 
 # Configuration based on seeded database
 ROUTES = {
-    1: {"stops": list(range(1, 8)), "name": "Downtown Express"},
-    2: {"stops": list(range(8, 15)), "name": "University Line"},
-    3: {"stops": list(range(15, 21)), "name": "Airport Shuttle"}
+    1: {"stops": [1, 2, 3, 4, 5], "name": "138"},
+    2: {"stops": [6, 7, 8, 9, 10], "name": "2"},
+    3: {"stops": [11, 12, 13, 14, 15, 16], "name": "4"},
+    4: {"stops": [17, 18, 19, 20, 21], "name": "99"},
+    5: {"stops": [22, 23, 24, 25], "name": "48"}
 }
 
 BUSES = {
-    1: 1, 2: 1, 3: 1,  # Route 1
-    4: 2, 5: 2, 6: 2,  # Route 2
-    7: 3, 8: 3, 9: 3, 10: 3  # Route 3
+    1: 1, 2: 1, 3: 1,
+    4: 2, 5: 2,
+    6: 3, 7: 3,
+    8: 4,
+    9: 5, 10: 5
 }
 
 # Weather conditions
@@ -82,12 +86,13 @@ def generate_arrival_features(bus_id, stop_id, arrival_time):
     time_since_last_report_s = np.random.uniform(5, 300)
     time_since_first_report_s = np.random.uniform(60, 600)
     
-    distance_mean = np.random.uniform(10, 500)
+    # Distance features, restricted generally tight radius mimicking the new Node.js valid filter
+    distance_mean = np.random.uniform(2, 20)
     distance_median = distance_mean * np.random.uniform(0.8, 1.2)
     distance_std = distance_mean * np.random.uniform(0.1, 0.4)
     
-    pct_within_radius = np.random.uniform(0.3, 1.0)
-    acc_mean = np.random.uniform(0.0005, 0.005)
+    pct_within_radius = 1.0  # Since invalid reports are now stripped, valid reports inherently are 100% within radius
+    acc_mean = np.random.uniform(0.6, 0.95)
     weighted_dist_mean = distance_mean * np.random.uniform(0.8, 1.2)
     
     prev_arrival_time = arrival_time - np.random.uniform(1800, 7200)
@@ -127,20 +132,24 @@ def generate_arrival_features(bus_id, stop_id, arrival_time):
     
     event_nearby = np.random.choice([0, 1], p=[0.95, 0.05])  # 5% chance of event
     
-    # Confirmation probability
-    confirm_prob = min(0.95, max(0.1, 
-        (report_count / 25) * 0.3 +
-        (unique_reporters / 20) * 0.3 +
-        pct_within_radius * 0.2 +
-        (1 - min(distance_std / 200, 1)) * 0.2
+    # Add direct linear correlation for report count & probability to confirmation probability
+    confirm_prob = min(0.99, max(0.1, 
+        (report_count / 15) * 0.45 +  # Increased weight from 0.3, maxes at 15 reports
+        (unique_reporters / 10) * 0.35 + # Increased weight from 0.3
+        pct_within_radius * 0.2
     ))
+    
+    # Penalize low report counts heavily (less than 3 is usually rejected)
+    if report_count < 3:
+        confirm_prob *= 0.3
+
     
     return {
         'bus_id': bus_id,
         'stop_id': stop_id,
-        'route_id': ((bus_id - 1) // 3) + 1,  # Routes 1-3 based on bus_id
-        'trip_id': ((bus_id - 1) % 3) + 1 + (((bus_id - 1) // 3) * 3),  # Trip within route
-        'arrival_time': int(arrival_time * 1000),
+        'route_id': BUSES[bus_id],
+        'trip_id': bus_id,
+        'arrival_time': int(arrival_time),
         'report_count': report_count,
         'unique_reporters': unique_reporters,
         'reports_per_minute': round(reports_per_minute, 2),
@@ -152,9 +161,9 @@ def generate_arrival_features(bus_id, stop_id, arrival_time):
         'pct_within_radius': round(pct_within_radius, 2),
         'acc_mean': round(acc_mean, 6),
         'weighted_dist_mean': round(weighted_dist_mean, 2),
-        'prev_arrival_time': round(prev_arrival_time * 1000, 1),
+        'prev_arrival_time': round(prev_arrival_time, 1),
         'time_since_last_arrival_s': round(time_since_last_arrival_s, 1),
-        't_mean': round(t_mean * 1000, 2),
+        't_mean': round(t_mean, 2),
         't_std': round(t_std, 2),
         'hour_of_day': hour_of_day,
         'day_of_week': day_of_week,
@@ -273,27 +282,42 @@ def generate_eta_features(bus_id, target_stop_id, prediction_time, scheduled_tim
     weather_thunderstorm = 0
     weather_unknown = 0
     
-    # Reporter features
-    reporters_at_target_stop = np.random.randint(0, 8)
-    avg_reporter_accuracy_target = np.random.uniform(0.7, 0.95) if reporters_at_target_stop > 0 else 0
-    recent_report_density = np.random.uniform(0.2, 0.95)
-    report_consensus_strength = np.random.uniform(0.65, 0.95)
-    has_high_quality_reporter = 1 if avg_reporter_accuracy_target > 0.85 else 0
-    reporter_cluster_tightness = np.random.uniform(0.55, 0.9)
+    # Reporter features - add direct correlation for ETA prediction
+    reporters_at_target_stop = np.random.randint(0, 15)
+    
+    # More reporters = higher consensus and tighter clusters
+    if reporters_at_target_stop > 0:
+        avg_reporter_accuracy_target = np.random.uniform(0.7, 0.95) + (reporters_at_target_stop / 150)
+        recent_report_density = min(1.0, reporters_at_target_stop / 10.0 + np.random.uniform(0, 0.2))
+        report_consensus_strength = min(1.0, 0.6 + reporters_at_target_stop / 20.0 + np.random.uniform(0, 0.1))
+        reporter_cluster_tightness = min(1.0, 0.5 + reporters_at_target_stop / 25.0 + np.random.uniform(0, 0.1))
+        has_high_quality_reporter = 1 if avg_reporter_accuracy_target > 0.85 or reporters_at_target_stop > 5 else 0
+    else:
+        avg_reporter_accuracy_target = 0
+        recent_report_density = 0
+        report_consensus_strength = 0
+        reporter_cluster_tightness = 0
+        has_high_quality_reporter = 0
+
     
     # Actual ETA (target variable)
     base_eta = total_segment_time_remaining + current_delay_seconds
     weather_impact = (weather_delay_multiplier - 1) * 300
     traffic_impact = (traffic_level_encoded - 1) * 200
-    actual_eta_seconds = int(max(60, base_eta + weather_impact + traffic_impact + np.random.randint(-180, 180)))
+    
+    # Reporters lower ETA uncertainty and generally report when bus is closer, so we add a negative correlation 
+    # (more reporters = slightly faster/more certain ETA) to simulate real-world human behavior in the synthetic data
+    reporter_speedup = min(reporters_at_target_stop * 15, 180) 
+    
+    actual_eta_seconds = int(max(60, base_eta + weather_impact + traffic_impact - reporter_speedup + np.random.randint(-180, 180)))
     
     return {
         'bus_id': bus_id,
         'target_stop_id': target_stop_id,
-        'route_id': ((bus_id - 1) // 3) + 1,  # Routes 1-3 based on bus_id
-        'trip_id': ((bus_id - 1) % 3) + 1 + (((bus_id - 1) // 3) * 3),  # Trip within route
-        'prediction_made_at': int(prediction_time * 1000),
-        'scheduled_arrival_time': int(scheduled_time * 1000),
+        'route_id': BUSES[bus_id],
+        'trip_id': bus_id,
+        'prediction_made_at': int(prediction_time),
+        'scheduled_arrival_time': int(scheduled_time),
         'seconds_until_scheduled': seconds_until_scheduled,
         'current_delay_seconds': current_delay_seconds,
         'delay_at_last_stop': delay_at_last_stop,
@@ -430,12 +454,12 @@ if __name__ == "__main__":
     if os.path.exists(arrivals_path):
         backup_path = os.path.join(script_dir, 'arrivals', f'arrivals_backup_{timestamp}.csv')
         shutil.copy(arrivals_path, backup_path)
-        print(f"✓ Backed up existing arrivals to {backup_path}")
+        print(f"Backed up existing arrivals to {backup_path}")
     
     if os.path.exists(eta_path):
         backup_path = os.path.join(script_dir, 'eta', f'eta_backup_{timestamp}.csv')
         shutil.copy(eta_path, backup_path)
-        print(f"✓ Backed up existing ETA data to {backup_path}")
+        print(f"Backed up existing ETA data to {backup_path}")
     
     # Generate fresh data (more samples for better training)
     print("\nGenerating new training data...")
@@ -444,10 +468,10 @@ if __name__ == "__main__":
     
     # Save fresh CSVs
     arrivals_df.to_csv(arrivals_path, index=False)
-    print(f"✓ Saved {len(arrivals_df)} arrivals to {arrivals_path}")
+    print(f"Saved {len(arrivals_df)} arrivals to {arrivals_path}")
     
     eta_df.to_csv(eta_path, index=False)
-    print(f"✓ Saved {len(eta_df)} ETA records to {eta_path}")
+    print(f"Saved {len(eta_df)} ETA records to {eta_path}")
     
     print("\n" + "=" * 60)
     print("Training Data Generation Complete!")
@@ -455,6 +479,6 @@ if __name__ == "__main__":
     print(f"\nFinal counts:")
     print(f"  Arrivals: {len(arrivals_df)} records")
     print(f"  ETA:      {len(eta_df)} records")
-    print(f"\n💡 Tip: Run the training scripts to build ML models with this data")
+    print(f"\nTip: Run the training scripts to build ML models with this data")
 
 
