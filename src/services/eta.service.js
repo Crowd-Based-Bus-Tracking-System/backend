@@ -116,20 +116,50 @@ class BaseEtaService {
 
         let totalTime = 0;
         let fromStopId = lastConfirmedStop.stopId;
+        const segmentTimes = [];
 
         for (const stop of remainingStops) {
             const segmentTime = await getSegmentTime(fromStopId, stop.id, routeId);
+            segmentTimes.push(segmentTime);
             totalTime += segmentTime;
             fromStopId = stop.id;
         }
 
         const timeSinceLastArrival = (Date.now() - lastConfirmedStop.arrivedAt) / 1000;
-        const eta_seconds = Math.max(0, totalTime - timeSinceLastArrival);
+
+        let cumulativeTime = 0;
+        let inferredPassedCount = 0;
+
+        for (let i = 0; i < remainingStops.length; i++) {
+            cumulativeTime += segmentTimes[i];
+            if (timeSinceLastArrival > cumulativeTime * 3) {
+                inferredPassedCount = i + 1;
+            } else {
+                break;
+            }
+        }
+
+        if (inferredPassedCount >= remainingStops.length) {
+            return { eta_seconds: 0, method: "already_passed" };
+        }
+
+        let adjustedTotalTime = 0;
+        for (let i = inferredPassedCount; i < segmentTimes.length; i++) {
+            adjustedTotalTime += segmentTimes[i];
+        }
+
+        let timeConsumedToInferredPoint = 0;
+        for (let i = 0; i < inferredPassedCount; i++) {
+            timeConsumedToInferredPoint += segmentTimes[i];
+        }
+        const timeSinceInferredPoint = timeSinceLastArrival - timeConsumedToInferredPoint;
+        const eta_seconds = Math.max(0, adjustedTotalTime - timeSinceInferredPoint);
 
         return {
             eta_seconds,
-            method: "historical_segments",
-            segment_count: remainingStops.length,
+            method: inferredPassedCount > 0 ? "historical_inferred" : "historical_segments",
+            segment_count: remainingStops.length - inferredPassedCount,
+            inferred_passed: inferredPassedCount,
             time_since_last_arrival: timeSinceLastArrival,
             confidence: calculateConfidence(lastConfirmedStop.minutesSinceArrival)
         };
@@ -177,16 +207,69 @@ class ETAFusionEngine {
 
         const mlETA = await predictETAWithML(data);
 
+        let tripDurationMinutes = 120;
+        try {
+            const tripData = await getActiveOrNextTripForBus(busId);
+            const trip = tripData?.activeTrip || tripData?.nextTrip || tripData?.firstTrip;
+            if (trip?.stops?.length >= 2) {
+                const firstStopMs = trip.stops[0].tMs;
+                const lastStopMs = trip.stops[trip.stops.length - 1].tMs;
+                tripDurationMinutes = Math.max(15, (lastStopMs - firstStopMs) / 60000);
+            }
+        } catch (e) {
+        }
+
         const weights = this.calculateWeights(
             lastConfirmedStop,
             mlETA,
-            scheduleBasedETA
+            scheduleBasedETA,
+            tripDurationMinutes
         );
 
         let finalETA = 0;
         const methods = [];
 
-        if (historicalETA.eta_seconds !== null && historicalETA.eta_seconds !== 0 && weights.historical > 0) {
+        const usable = {
+            historical: historicalETA.eta_seconds !== null && historicalETA.eta_seconds > 0 && weights.historical > 0,
+            schedule: scheduleBasedETA.eta_seconds !== 0 && weights.schedule > 0,
+            ml: !!(mlETA.mlPrediction && mlETA.confidence !== undefined && weights.ml > 0)
+        };
+
+        if (lastConfirmedStop && mlETA.mlPrediction && mlETA.confidence !== undefined && !usable.ml) {
+            const minMlFloor = 0.3;
+            weights.ml = minMlFloor;
+            usable.ml = true;
+        }
+
+        let droppedWeight = 0;
+        if (!usable.historical && weights.historical > 0) droppedWeight += weights.historical;
+        if (!usable.schedule && weights.schedule > 0) droppedWeight += weights.schedule;
+        if (!usable.ml && weights.ml > 0) droppedWeight += weights.ml;
+
+        if (droppedWeight > 0) {
+            let usableTotal = 0;
+            if (usable.historical) usableTotal += weights.historical;
+            if (usable.schedule) usableTotal += weights.schedule;
+            if (usable.ml) usableTotal += weights.ml;
+
+            if (usableTotal > 0) {
+                const redistributionRatio = (usableTotal + droppedWeight) / usableTotal;
+                if (usable.historical) weights.historical *= redistributionRatio;
+                if (usable.schedule) weights.schedule *= redistributionRatio;
+                if (usable.ml) weights.ml *= redistributionRatio;
+            }
+
+            const reNorm = this.normalizeWeights({
+                schedule: usable.schedule ? weights.schedule : 0,
+                historical: usable.historical ? weights.historical : 0,
+                ml: usable.ml ? weights.ml : 0
+            });
+            weights.schedule = reNorm.schedule;
+            weights.historical = reNorm.historical;
+            weights.ml = reNorm.ml;
+        }
+
+        if (usable.historical) {
             finalETA += historicalETA.eta_seconds * weights.historical;
             methods.push({
                 method: "historical",
@@ -195,7 +278,7 @@ class ETAFusionEngine {
             })
         }
 
-        if (scheduleBasedETA.eta_seconds !== 0 && weights.schedule > 0) {
+        if (usable.schedule) {
             finalETA += scheduleBasedETA.eta_seconds * weights.schedule;
             methods.push({
                 method: "schedule",
@@ -204,7 +287,7 @@ class ETAFusionEngine {
             })
         }
 
-        if (mlETA.mlPrediction && mlETA.confidence !== undefined && weights.ml > 0) {
+        if (usable.ml) {
             finalETA += mlETA.mlPrediction * weights.ml;
             methods.push({
                 method: "ml",
@@ -260,15 +343,18 @@ class ETAFusionEngine {
     }
 
 
-    calculateWeights(lastConfirmedStop, mlETA, scheduleBasedETA) {
+    calculateWeights(lastConfirmedStop, mlETA, scheduleBasedETA, tripDurationMinutes = 120) {
         const weights = { schedule: 0, historical: 0, ml: 0 };
 
-        if (scheduleBasedETA?.is_waiting) {
+        const activeThresholdMinutes = Math.min(240, Math.max(30, tripDurationMinutes * 1.5));
+        const isActuallyActive = lastConfirmedStop && lastConfirmedStop.minutesSinceArrival < activeThresholdMinutes;
+
+        if (scheduleBasedETA?.is_waiting && !lastConfirmedStop) {
             weights.schedule = 1.0;
             return weights;
         }
 
-        if (!lastConfirmedStop) {
+        if (!lastConfirmedStop && (!mlETA.mlPrediction || mlETA.confidence === undefined)) {
             weights.schedule = 1.0;
             weights.historical = 0;
             weights.ml = 0;
@@ -281,13 +367,21 @@ class ETAFusionEngine {
 
             let mlWeight = this.calculateMlWeight(mlConfidence);
 
-            const minutesSince = lastConfirmedStop.minutesSinceArrival || 0;
+            const minutesSince = lastConfirmedStop?.minutesSinceArrival || 0;
 
-            const mlAgeFactor = Math.exp(-minutesSince / 30);
+            const mlAgeFactor = Math.exp(-minutesSince / 60);
             mlWeight = mlWeight * mlAgeFactor;
 
-            const rawScheduleWeight = this.calculateScheduleWeight(mlConfidence);
-            const scheduleWeight = Math.min(rawScheduleWeight, 0.15);
+            if (lastConfirmedStop && mlWeight < 0.15) {
+                mlWeight = 0.15 * mlAgeFactor;
+                mlWeight = Math.max(0.05, mlWeight);
+            }
+
+            let scheduleWeight = Math.min(this.calculateScheduleWeight(mlConfidence), 0.15);
+
+            if (scheduleBasedETA?.is_waiting && lastConfirmedStop) {
+                scheduleWeight = 0;
+            }
 
             const historicalWeight = Math.max(0, 1 - mlWeight - scheduleWeight);
 
@@ -295,12 +389,18 @@ class ETAFusionEngine {
             weights.schedule = Math.max(0, Math.min(1, scheduleWeight));
             weights.historical = Math.max(0, Math.min(1, historicalWeight));
         } else {
-            const minutesSince = lastConfirmedStop.minutesSinceArrival;
+            const minutesSince = lastConfirmedStop?.minutesSinceArrival || 0;
 
             const ageFactor = Math.exp(-minutesSince / 15);
 
-            weights.historical = 0.85 * ageFactor;
-            weights.schedule = 1 - weights.historical;
+            if (scheduleBasedETA?.is_waiting && lastConfirmedStop) {
+                weights.historical = 1.0;
+                weights.schedule = 0;
+            } else {
+                weights.historical = 0.85 * ageFactor;
+                weights.schedule = 1 - weights.historical;
+            }
+
             weights.ml = 0;
         }
 
