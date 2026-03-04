@@ -8,6 +8,7 @@ import authRouter from "./routes/auth.route.js";
 import routeRouter from "./routes/route.route.js";
 import { createServer } from "http";
 import { initializeSocket } from "./socket/index.js";
+import { startTripAssignerCron } from "./services/tripAssigner.service.js";
 
 const express = (await import("express")).default;
 const cors = (await import("cors")).default;
@@ -17,6 +18,7 @@ const app = express();
 const httpServer = createServer(app);
 
 initializeSocket(httpServer);
+startTripAssignerCron();
 
 app.use(cors());
 app.use(express.json());

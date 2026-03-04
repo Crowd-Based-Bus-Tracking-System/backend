@@ -6,10 +6,22 @@ import { getPendingPrediction, logPredictionAccuracy } from "./ml-eta-prediction
 import { storeArrival, updateSegmentTime, getLastArrival } from "../models/arrival.js";
 import { getBusById } from "../models/bus.js";
 import { getWeatherImpact } from "./weather.service.js";
-import { getScheduleForStop } from "../models/shedule.js";
 import { getScheduledTime } from "../utils/eta-helpers.js";
+import { getActiveOrNextTripForBus } from "../models/shedule.js";
+import BusProgressionService from "./busProgression.service.js";
 import { emitBusArrival, emitBusETA, emitBusPosition, emitRouteBusesUpdate } from "../socket/emitters/bus-updates.js";
 import { getRouteBusesSortedByETA } from "./routeBuses.service.js";
+import { getIO } from "../socket/index.js";
+
+async function getScheduleForStop(busId, stopId) {
+    const tripData = await getActiveOrNextTripForBus(busId);
+    if (!tripData) return null;
+    const selectedTrip = tripData.activeTrip || tripData.nextTrip || tripData.firstTrip;
+    if (!selectedTrip) return null;
+    return selectedTrip.stops.find(s => s.stop_id == stopId) || null;
+}
+
+const busProgressionService = new BusProgressionService();
 
 const MIN_REPORTS = 3;
 const MIN_REPORT_INTERVAL = 60 * 1000;

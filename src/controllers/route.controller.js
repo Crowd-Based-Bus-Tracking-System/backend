@@ -2,6 +2,7 @@ import pool from "../config/db.js";
 import { getRouteStops } from "../models/route.js";
 import { getBusesByRoute } from "../models/bus.js";
 import redis from "../config/redis.js";
+import { getBusStatus } from "../socket/emitters/bus-updates.js";
 
 export const getRoutes = async (req, res) => {
     try {
@@ -16,27 +17,26 @@ export const getRoutes = async (req, res) => {
             const buses = await getBusesByRoute(route.id);
 
             const enrichedBuses = await Promise.all(buses.map(async (b) => {
-                const lastStop = await redis.get(`bus:${b.id}:last_stop`);
-                const lastArrivalTime = await redis.get(`bus:${b.id}:last_arrival_time`);
+                const status = await getBusStatus(b.id, route.id);
 
                 let formattedUpdate = "Just now";
-                if (lastArrivalTime) {
-                    const timeMs = parseInt(lastArrivalTime) * 1000;
-                    formattedUpdate = new Date(timeMs).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                if (status.lastConfirmedStop?.arrivedAt) {
+                    formattedUpdate = new Date(status.lastConfirmedStop.arrivedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
                 }
 
                 return {
                     id: `b${b.id}`,
                     dbId: b.id,
                     plateNumber: b.bus_number,
-                    status: b.status.toLowerCase(),
+                    status: status.status,
+                    isSimulated: status.isSimulated || false,
                     lastUpdated: formattedUpdate,
                     occupancy: "low",
-                    lat: 0,
-                    lng: 0,
+                    lat: status.estimatedPosition?.lat || 0,
+                    lng: status.estimatedPosition?.lng || 0,
                     speed: 0,
                     heading: 0,
-                    hasConfirmedStop: lastStop !== null
+                    hasConfirmedStop: !status.isSimulated
                 };
             }));
 
