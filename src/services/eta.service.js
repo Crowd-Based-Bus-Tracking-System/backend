@@ -1,6 +1,6 @@
 import redis from "../config/redis.js";
 import BusProgressionService from "./busProgression.service.js";
-import { getScheduleForStop } from "../models/shedule.js";
+import { getActiveOrNextTripForBus } from "../models/shedule.js";
 import { predictETAWithML } from "./ml-eta-prediction/mlEtaIntegration.service.js";
 import { getBusById } from "../models/bus.js";
 import { getScheduledTime, getNextScheduledTime, getSegmentTime, calculateConfidence } from "../utils/eta-helpers.js";
@@ -13,17 +13,64 @@ class BaseEtaService {
 
     async calculateScheduleBasedETA(busId, targetStopId) {
         const lastConfirmedStop = await this.busProgressionService.getLastConfirmedStop(busId);
-        const schedule = await getScheduleForStop(busId, targetStopId);
+        const tripData = await getActiveOrNextTripForBus(busId);
 
-        if (!schedule) {
+        if (!tripData) {
             return { eta_seconds: null, method: "no_schedule" };
         }
 
-        const now = Date.now();
-        const scheduledTime = getNextScheduledTime(schedule);
-        const scheduledETA = (scheduledTime - now) / 1000;
+        const { activeTrip, nextTrip, firstTrip } = tripData;
 
-        if (!lastConfirmedStop) {
+        const now = new Date();
+        const currentSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+
+        let selectedTrip = null;
+        let isWaitingForNext = false;
+
+        if (activeTrip) {
+            selectedTrip = activeTrip;
+        } else if (nextTrip) {
+            selectedTrip = nextTrip;
+            isWaitingForNext = true;
+        } else {
+            selectedTrip = firstTrip;
+            isWaitingForNext = true;
+        }
+
+        const targetStopSchedule = selectedTrip.stops.find(s => s.stop_id == targetStopId);
+        if (!targetStopSchedule) {
+            return { eta_seconds: null, method: "stop_not_in_trip" };
+        }
+
+        let scheduledETA = 0;
+
+        if (isWaitingForNext) {
+            let waitTimeSecs = selectedTrip.startSecs - currentSeconds;
+            if (waitTimeSecs < 0) waitTimeSecs += 86400;
+
+            const firstStop = selectedTrip.stops[0];
+            const tripTransitTime = (targetStopSchedule.tMs - firstStop.tMs) / 1000;
+
+            scheduledETA = waitTimeSecs + tripTransitTime;
+        } else {
+            const targetStopSecs = targetStopSchedule.tMs / 1000;
+            if (currentSeconds > targetStopSecs) {
+                return { eta_seconds: 0, method: "already_passed" };
+            }
+            scheduledETA = targetStopSecs - currentSeconds;
+        }
+
+        if (!lastConfirmedStop || isWaitingForNext) {
+            return {
+                eta_seconds: Math.max(0, scheduledETA),
+                method: "schedule_only",
+                is_waiting: isWaitingForNext,
+                confidence: 0.2
+            };
+        }
+
+        const lastStopSchedule = selectedTrip.stops.find(s => s.stop_id == lastConfirmedStop.stopId);
+        if (!lastStopSchedule) {
             return {
                 eta_seconds: Math.max(0, scheduledETA),
                 method: "schedule_only",
@@ -31,14 +78,18 @@ class BaseEtaService {
             };
         }
 
-        const lastStopSchedule = await getScheduleForStop(busId, lastConfirmedStop.stopId);
-        const currentDelay = lastConfirmedStop.arrivedAt - getScheduledTime(lastStopSchedule);
+        const scheduledAtLastStop = new Date();
+        const [h, m, s] = lastStopSchedule.sheduled_arrival_time.split(':').map(Number);
+        scheduledAtLastStop.setHours(h, m, s || 0, 0);
 
-        const eta_seconds = Math.max(0, (scheduledETA + currentDelay / 1000));
+        const currentDelay = lastConfirmedStop.arrivedAt - scheduledAtLastStop.getTime();
+
+        const eta_seconds = Math.max(0, scheduledETA + (currentDelay / 1000));
 
         return {
             eta_seconds,
             method: "schedule_with_delay",
+            is_waiting: false,
             current_delay_seconds: currentDelay / 1000,
             confidence: 0.4
         }
@@ -128,13 +179,14 @@ class ETAFusionEngine {
 
         const weights = this.calculateWeights(
             lastConfirmedStop,
-            mlETA
+            mlETA,
+            scheduleBasedETA
         );
 
         let finalETA = 0;
         const methods = [];
 
-        if (historicalETA.eta_seconds !== 0 && weights.historical > 0) {
+        if (historicalETA.eta_seconds !== null && historicalETA.eta_seconds !== 0 && weights.historical > 0) {
             finalETA += historicalETA.eta_seconds * weights.historical;
             methods.push({
                 method: "historical",
@@ -208,12 +260,17 @@ class ETAFusionEngine {
     }
 
 
-    calculateWeights(lastConfirmedStop, mlETA) {
+    calculateWeights(lastConfirmedStop, mlETA, scheduleBasedETA) {
         const weights = { schedule: 0, historical: 0, ml: 0 };
 
+        if (scheduleBasedETA?.is_waiting) {
+            weights.schedule = 1.0;
+            return weights;
+        }
+
         if (!lastConfirmedStop) {
-            weights.schedule = 0.8;
-            weights.historical = 0.2;
+            weights.schedule = 1.0;
+            weights.historical = 0;
             weights.ml = 0;
 
             return this.normalizeWeights(weights);
@@ -222,9 +279,17 @@ class ETAFusionEngine {
         if (mlETA.mlPrediction && mlETA.confidence !== undefined) {
             const mlConfidence = mlETA.confidence;
 
-            const mlWeight = this.calculateMlWeight(mlConfidence);
-            const scheduleWeight = this.calculateScheduleWeight(mlConfidence);
-            const historicalWeight = 1 - mlWeight - scheduleWeight;
+            let mlWeight = this.calculateMlWeight(mlConfidence);
+
+            const minutesSince = lastConfirmedStop.minutesSinceArrival || 0;
+
+            const mlAgeFactor = Math.exp(-minutesSince / 30);
+            mlWeight = mlWeight * mlAgeFactor;
+
+            const rawScheduleWeight = this.calculateScheduleWeight(mlConfidence);
+            const scheduleWeight = Math.min(rawScheduleWeight, 0.15);
+
+            const historicalWeight = Math.max(0, 1 - mlWeight - scheduleWeight);
 
             weights.ml = Math.max(0, Math.min(1, mlWeight));
             weights.schedule = Math.max(0, Math.min(1, scheduleWeight));
@@ -234,7 +299,7 @@ class ETAFusionEngine {
 
             const ageFactor = Math.exp(-minutesSince / 15);
 
-            weights.historical = 0.3 * ageFactor;
+            weights.historical = 0.85 * ageFactor;
             weights.schedule = 1 - weights.historical;
             weights.ml = 0;
         }

@@ -1,5 +1,6 @@
 
 import { getRouteBusesSortedByETA } from "../../services/routeBuses.service.js";
+import { getBusStatus } from "../emitters/bus-updates.js";
 
 export const setupBusTrackingHandlers = (socket, io) => {
     socket.on("subscribe:bus", async ({ busId, routeId }) => {

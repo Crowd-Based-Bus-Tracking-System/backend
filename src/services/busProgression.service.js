@@ -1,4 +1,5 @@
 import redis from "../config/redis.js";
+import { getBusById } from "../models/bus.js";
 import { getRouteStops } from "../models/route.js";
 
 
@@ -22,6 +23,9 @@ class BusProgressionService {
 
     async getRemainingStops(busId, targetStopId) {
         try {
+            const bus = await getBusById(busId);
+            if (!bus || !bus.route_id) return [];
+
             const routeStops = await getRouteStops(busId);
 
             if (!Array.isArray(routeStops) || routeStops.length === 0) {

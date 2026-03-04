@@ -80,6 +80,7 @@ export const getRouteBusesSortedByETA = async (routeId, targetStopId, location) 
                     busId: bus.id,
                     busNumber: bus.bus_number,
                     status: status.status,
+                    isSimulated: status.isSimulated || false,
                     speed: calculatedSpeed,
                     next_stop_name: nextStopObj?.name || "Unknown",
                     lastConfirmedStop: status.lastConfirmedStop || null,
