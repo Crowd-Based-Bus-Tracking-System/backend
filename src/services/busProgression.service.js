@@ -1,4 +1,5 @@
 import redis from "../config/redis.js";
+import { getBusById } from "../models/bus.js";
 import { getRouteStops } from "../models/route.js";
 
 
@@ -22,7 +23,10 @@ class BusProgressionService {
 
     async getRemainingStops(busId, targetStopId) {
         try {
-            const routeStops = await getRouteStops(busId);
+            const bus = await getBusById(busId);
+            if (!bus || !bus.route_id) return [];
+
+            const routeStops = await getRouteStops(bus.route_id);
 
             if (!Array.isArray(routeStops) || routeStops.length === 0) {
                 console.warn(`No route stops found for bus ${busId}`);

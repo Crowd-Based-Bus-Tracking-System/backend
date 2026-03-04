@@ -1,24 +1,59 @@
 import pool from "../config/db.js";
 
-export const getScheduleForStop = async (busId, stopId) => {
-    const tripResult = await pool.query(`
-        SELECT ts.scheduled_arrival_time as sheduled_arrival_time, t.trip_name
-        FROM buses b
-        JOIN trips t ON b.current_trip_id = t.id
-        JOIN trip_schedules ts ON ts.trip_id = t.id AND ts.stop_id = $2
-        WHERE b.id = $1 AND b.current_trip_id IS NOT NULL
-    `, [busId, stopId]);
+export const getActiveOrNextTripForBus = async (busId) => {
+    const tripsResult = await pool.query(`
+        SELECT t.id as trip_id, t.start_time, t.end_time,
+               ts.stop_id, ts.scheduled_arrival_time as sheduled_arrival_time, ts.stop_sequence
+        FROM trips t
+        JOIN trip_schedules ts ON ts.trip_id = t.id
+        WHERE t.bus_id = $1
+        ORDER BY t.start_time ASC, ts.stop_sequence ASC
+    `, [busId]);
 
-    if (tripResult.rows.length > 0) {
-        return tripResult.rows[0];
+    if (tripsResult.rows.length === 0) return null;
+
+    const parseTime = (timeStr) => {
+        const [h, m, s] = timeStr.split(':').map(Number);
+        return h * 3600 + m * 60 + (s || 0);
+    };
+
+    const now = new Date();
+    const currentSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+
+    const trips = [];
+    let currentTripId = null;
+    let currentTrip = null;
+
+    for (const row of tripsResult.rows) {
+        if (row.trip_id !== currentTripId) {
+            currentTripId = row.trip_id;
+            currentTrip = {
+                id: row.trip_id,
+                startSecs: parseTime(row.start_time),
+                endSecs: parseTime(row.end_time),
+                stops: []
+            };
+            trips.push(currentTrip);
+        }
+        currentTrip.stops.push({
+            stop_id: row.stop_id,
+            sheduled_arrival_time: row.sheduled_arrival_time,
+            tMs: parseTime(row.sheduled_arrival_time) * 1000
+        });
     }
 
-    const result = await pool.query(`
-        SELECT s.sheduled_arrival_time, s.day_type
-        FROM buses b
-        JOIN shedules s ON b.route_id = s.route_id
-        WHERE b.id = $1 AND s.stop_id = $2
-    `, [busId, stopId]);
+    let activeTrip = null;
+    let nextTrip = null;
 
-    return result.rows[0] || null;
-}
+    for (const trip of trips) {
+        if (currentSeconds >= trip.startSecs && currentSeconds <= trip.endSecs) {
+            activeTrip = trip;
+            break;
+        }
+        if (trip.startSecs > currentSeconds && !nextTrip) {
+            nextTrip = trip;
+        }
+    }
+
+    return { activeTrip, nextTrip, firstTrip: trips[0] };
+};

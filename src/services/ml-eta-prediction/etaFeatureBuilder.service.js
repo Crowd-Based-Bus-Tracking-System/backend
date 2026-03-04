@@ -2,12 +2,20 @@ import redis from "../../config/redis.js";
 import pool from "../../config/db.js";
 import BusProgressionService from "../busProgression.service.js";
 import { getScheduledTime, getSegmentTime } from "../../utils/eta-helpers.js";
-import { getScheduleForStop } from "../../models/shedule.js";
+import { getActiveOrNextTripForBus } from "../../models/shedule.js";
 import { getRouteStops } from "../../models/route.js";
 import { mean, median, stddev } from "../../utils/math.js";
 import { getWeatherImpact, encodeWeatherCondition } from "../weather.service.js";
 import { getAverageDelayByHour, getAverageDelayToday, getDelaySByHourandDOW, getDelayTrend, getRecent24hArrivals, getRecent7dArrivals, getStopDelays } from "../../models/arrival.js";
 import { getBusById } from "../../models/bus.js";
+
+async function getScheduleForStop(busId, stopId) {
+    const tripData = await getActiveOrNextTripForBus(busId);
+    if (!tripData) return null;
+    const selectedTrip = tripData.activeTrip || tripData.nextTrip || tripData.firstTrip;
+    if (!selectedTrip) return null;
+    return selectedTrip.stops.find(s => s.stop_id == stopId) || null;
+}
 
 const busProgressionService = new BusProgressionService();
 
