@@ -112,7 +112,6 @@ export const getRouteTimetable = async (req, res) => {
             };
 
             timetable.weekday.push(entry);
-            // In the current schema, all trips operate daily, so we can duplicate to weekend
             timetable.weekend.push(entry);
         }
 
