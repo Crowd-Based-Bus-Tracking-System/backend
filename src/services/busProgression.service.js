@@ -26,7 +26,7 @@ class BusProgressionService {
             const bus = await getBusById(busId);
             if (!bus || !bus.route_id) return [];
 
-            const routeStops = await getRouteStops(bus.route_id);
+            const routeStops = await getRouteStops(busId);
 
             if (!Array.isArray(routeStops) || routeStops.length === 0) {
                 console.warn(`No route stops found for bus ${busId}`);

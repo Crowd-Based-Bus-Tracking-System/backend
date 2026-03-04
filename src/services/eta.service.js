@@ -64,6 +64,7 @@ class BaseEtaService {
             return {
                 eta_seconds: Math.max(0, scheduledETA),
                 method: "schedule_only",
+                is_waiting: isWaitingForNext,
                 confidence: 0.2
             };
         }
@@ -88,6 +89,7 @@ class BaseEtaService {
         return {
             eta_seconds,
             method: "schedule_with_delay",
+            is_waiting: false,
             current_delay_seconds: currentDelay / 1000,
             confidence: 0.4
         }
@@ -177,7 +179,8 @@ class ETAFusionEngine {
 
         const weights = this.calculateWeights(
             lastConfirmedStop,
-            mlETA
+            mlETA,
+            scheduleBasedETA
         );
 
         let finalETA = 0;
@@ -257,8 +260,13 @@ class ETAFusionEngine {
     }
 
 
-    calculateWeights(lastConfirmedStop, mlETA) {
+    calculateWeights(lastConfirmedStop, mlETA, scheduleBasedETA) {
         const weights = { schedule: 0, historical: 0, ml: 0 };
+
+        if (scheduleBasedETA?.is_waiting) {
+            weights.schedule = 1.0;
+            return weights;
+        }
 
         if (!lastConfirmedStop) {
             weights.schedule = 1.0;
@@ -271,9 +279,17 @@ class ETAFusionEngine {
         if (mlETA.mlPrediction && mlETA.confidence !== undefined) {
             const mlConfidence = mlETA.confidence;
 
-            const mlWeight = this.calculateMlWeight(mlConfidence);
-            const scheduleWeight = this.calculateScheduleWeight(mlConfidence);
-            const historicalWeight = 1 - mlWeight - scheduleWeight;
+            let mlWeight = this.calculateMlWeight(mlConfidence);
+
+            const minutesSince = lastConfirmedStop.minutesSinceArrival || 0;
+
+            const mlAgeFactor = Math.exp(-minutesSince / 30);
+            mlWeight = mlWeight * mlAgeFactor;
+
+            const rawScheduleWeight = this.calculateScheduleWeight(mlConfidence);
+            const scheduleWeight = Math.min(rawScheduleWeight, 0.15);
+
+            const historicalWeight = Math.max(0, 1 - mlWeight - scheduleWeight);
 
             weights.ml = Math.max(0, Math.min(1, mlWeight));
             weights.schedule = Math.max(0, Math.min(1, scheduleWeight));
@@ -283,7 +299,7 @@ class ETAFusionEngine {
 
             const ageFactor = Math.exp(-minutesSince / 15);
 
-            weights.historical = 0.3 * ageFactor;
+            weights.historical = 0.85 * ageFactor;
             weights.schedule = 1 - weights.historical;
             weights.ml = 0;
         }

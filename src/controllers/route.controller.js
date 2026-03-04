@@ -71,12 +71,13 @@ export const getRouteTimetable = async (req, res) => {
         const routeDbId = req.params.routeId.replace('route-', '');
 
         const shedResult = await pool.query(
-            `SELECT s.id, s.route_id, s.stop_id, s.sheduled_arrival_time, s.day_type, 
-             st.sequence, st.name as stop_name
-             FROM shedules s
-             JOIN stops st ON s.stop_id = st.id
-             WHERE s.route_id = $1
-             ORDER BY s.day_type, st.sequence, s.sheduled_arrival_time`,
+            `SELECT ts.id, t.route_id, t.bus_id, ts.stop_id, ts.scheduled_arrival_time, 
+             ts.stop_sequence as sequence, st.name as stop_name, t.id as trip_id
+             FROM trip_schedules ts
+             JOIN trips t ON ts.trip_id = t.id
+             JOIN stops st ON ts.stop_id = st.id
+             WHERE t.route_id = $1
+             ORDER BY t.id, ts.stop_sequence, ts.scheduled_arrival_time`,
             [routeDbId]
         );
 
@@ -89,36 +90,29 @@ export const getRouteTimetable = async (req, res) => {
         const formatTime = (t) => t ? t.substring(0, 5) : '';
 
         const schedulesArray = shedResult.rows;
-        const dayGroups = {
-            'WEEKDAY': [],
-            'WEEKEND': []
-        };
 
-        const uniqueDayTypes = [...new Set(schedulesArray.map(s => s.day_type))];
+        const uniqueTrips = [...new Set(schedulesArray.map(s => s.trip_id))];
 
-        for (const day of uniqueDayTypes) {
-            const daySchedules = schedulesArray.filter(s => s.day_type === day);
+        for (const tId of uniqueTrips) {
+            const tripStops = schedulesArray.filter(s => s.trip_id === tId);
 
-            const stopSchedules = daySchedules.map(s => ({
+            const stopSchedules = tripStops.map(s => ({
                 stopId: `s${s.stop_id}`,
                 stopName: s.stop_name,
-                arrivalTime: formatTime(s.sheduled_arrival_time)
+                arrivalTime: formatTime(s.scheduled_arrival_time)
             }));
 
             const entry = {
-                tripId: `trip-${day.toLowerCase()}-all`,
-                busId: `b-generic`,
-                departureTime: formatTime(daySchedules[0]?.sheduled_arrival_time) || "06:00",
-                arrivalTime: formatTime(daySchedules[daySchedules.length - 1]?.sheduled_arrival_time) || "20:00",
+                tripId: `trip-${tId}`,
+                busId: tripStops[0].bus_id,
+                departureTime: formatTime(tripStops[0]?.scheduled_arrival_time) || "06:00",
+                arrivalTime: formatTime(tripStops[tripStops.length - 1]?.scheduled_arrival_time) || "20:00",
                 busType: "normal",
                 stopSchedules
             };
 
-            if (day === 'WEEKEND') {
-                timetable.weekend.push(entry);
-            } else {
-                timetable.weekday.push(entry);
-            }
+            timetable.weekday.push(entry);
+            timetable.weekend.push(entry);
         }
 
         res.status(200).json(timetable);
