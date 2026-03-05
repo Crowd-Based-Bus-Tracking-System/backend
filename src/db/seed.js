@@ -1,501 +1,581 @@
 import pool from "../config/db.js";
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+/* ═══════════════════════════ helpers ═══════════════════════════ */
 
-// Sample data structure
-const ROUTES_DATA = [
-    { id: 1, route_number: "138", name: "Colombo - Kandy", start_city: "Colombo Fort", end_city: "Kandy" },
-    { id: 2, route_number: "2", name: "Colombo - Galle", start_city: "Colombo Fort", end_city: "Galle" },
-    { id: 3, route_number: "4", name: "Colombo - Jaffna", start_city: "Colombo Fort", end_city: "Jaffna" },
-    { id: 4, route_number: "99", name: "Colombo - Matara", start_city: "Colombo Fort", end_city: "Matara" },
-    { id: 5, route_number: "48", name: "Kandy - Nuwara Eliya", start_city: "Kandy", end_city: "Nuwara Eliya" }
+const rand     = (a, b) => Math.random() * (b - a) + a;
+const randInt  = (a, b) => Math.floor(rand(a, b));
+const choice   = (arr)  => arr[randInt(0, arr.length)];
+const clamp    = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+
+/** Box-Muller: normally distributed sample */
+function randNormal(mean, std) {
+  let u = 0, v = 0;
+  while (!u) u = Math.random();
+  while (!v) v = Math.random();
+  return mean + std * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+function haversine(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const toR = (d) => (d * Math.PI) / 180;
+  const dLat = toR(lat2 - lat1);
+  const dLon = toR(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toR(lat1)) * Math.cos(toR(lat2)) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/** Pad time components for SQL TIME strings */
+function pad2(n) { return String(n).padStart(2, "0"); }
+function toTimeStr(h, m) { return `${pad2(Math.min(h, 23))}:${pad2(m % 60)}`; }
+
+/* ═══════════════════════════ static reference data ═══════════════════════════ */
+
+const ROUTES = [
+  { id: 1, number: "138", name: "Colombo - Kandy",       start: "Colombo Fort", end: "Kandy"        },
+  { id: 2, number: "2",   name: "Colombo - Galle",       start: "Colombo Fort", end: "Galle"        },
+  { id: 3, number: "4",   name: "Colombo - Jaffna",      start: "Colombo Fort", end: "Jaffna"       },
+  { id: 4, number: "99",  name: "Colombo - Matara",      start: "Colombo Fort", end: "Matara"       },
+  { id: 5, number: "48",  name: "Kandy - Nuwara Eliya",  start: "Kandy",        end: "Nuwara Eliya" },
 ];
 
+/**
+ * roadType drives realistic speed envelopes:
+ *   highway  → 65–85 km/h  (expressway stretches)
+ *   main     → 38–60 km/h  (A-roads between towns)
+ *   mountain → 16–30 km/h  (B-road hill country)
+ *   city     → 10–22 km/h  (urban congestion)
+ */
 const STOPS_DATA = [
-    { id: 1, route_id: 1, name: "Colombo Fort", latitude: 6.9344, longitude: 79.8428, sequence: 1 },
-    { id: 2, route_id: 1, name: "Kadawatha", latitude: 7.0013, longitude: 79.953, sequence: 2 },
-    { id: 3, route_id: 1, name: "Kadugannawa", latitude: 7.2547, longitude: 80.5243, sequence: 3 },
-    { id: 4, route_id: 1, name: "Peradeniya", latitude: 7.269, longitude: 80.5942, sequence: 4 },
-    { id: 5, route_id: 1, name: "Kandy", latitude: 7.2906, longitude: 80.6337, sequence: 5 },
-    { id: 6, route_id: 2, name: "Colombo Fort", latitude: 6.9344, longitude: 79.8428, sequence: 1 },
-    { id: 7, route_id: 2, name: "Moratuwa", latitude: 6.773, longitude: 79.8816, sequence: 2 },
-    { id: 8, route_id: 2, name: "Panadura", latitude: 6.7136, longitude: 79.9044, sequence: 3 },
-    { id: 9, route_id: 2, name: "Ambalangoda", latitude: 6.2352, longitude: 80.054, sequence: 4 },
-    { id: 10, route_id: 2, name: "Galle", latitude: 6.0535, longitude: 80.221, sequence: 5 },
-    { id: 11, route_id: 3, name: "Colombo Fort", latitude: 6.9344, longitude: 79.8428, sequence: 1 },
-    { id: 12, route_id: 3, name: "Kurunegala", latitude: 7.4863, longitude: 80.3623, sequence: 2 },
-    { id: 13, route_id: 3, name: "Dambulla", latitude: 7.8742, longitude: 80.6511, sequence: 3 },
-    { id: 14, route_id: 3, name: "Anuradhapura", latitude: 8.3114, longitude: 80.4037, sequence: 4 },
-    { id: 15, route_id: 3, name: "Kilinochchi", latitude: 9.3803, longitude: 80.377, sequence: 5 },
-    { id: 16, route_id: 3, name: "Jaffna", latitude: 9.6615, longitude: 80.0255, sequence: 6 },
-    { id: 17, route_id: 4, name: "Colombo Fort", latitude: 6.9344, longitude: 79.8428, sequence: 1 },
-    { id: 18, route_id: 4, name: "Panadura", latitude: 6.7136, longitude: 79.9044, sequence: 2 },
-    { id: 19, route_id: 4, name: "Galle", latitude: 6.0535, longitude: 80.221, sequence: 3 },
-    { id: 20, route_id: 4, name: "Weligama", latitude: 5.9745, longitude: 80.4296, sequence: 4 },
-    { id: 21, route_id: 4, name: "Matara", latitude: 5.9549, longitude: 80.555, sequence: 5 },
-    { id: 22, route_id: 5, name: "Kandy", latitude: 7.2906, longitude: 80.6337, sequence: 1 },
-    { id: 23, route_id: 5, name: "Gampola", latitude: 7.1642, longitude: 80.5767, sequence: 2 },
-    { id: 24, route_id: 5, name: "Nawalapitiya", latitude: 7.0489, longitude: 80.5345, sequence: 3 },
-    { id: 25, route_id: 5, name: "Nuwara Eliya", latitude: 6.9497, longitude: 80.7891, sequence: 4 }
+  // ── Route 1: Colombo Fort → Kandy (A1 then Kadugannawa mountain pass)
+  { route:1, name:"Colombo Fort",  lat:6.9344, lon:79.8428, roadType:"city"     },
+  { route:1, name:"Kelaniya",      lat:6.9553, lon:79.9217, roadType:"city"     },
+  { route:1, name:"Kadawatha",     lat:7.0013, lon:79.9530, roadType:"main"     },
+  { route:1, name:"Nittambuwa",    lat:7.1442, lon:80.0953, roadType:"main"     },
+  { route:1, name:"Kegalle",       lat:7.2530, lon:80.3464, roadType:"main"     },
+  { route:1, name:"Mawanella",     lat:7.2425, lon:80.4440, roadType:"mountain" },
+  { route:1, name:"Kadugannawa",   lat:7.2547, lon:80.5243, roadType:"mountain" },
+  { route:1, name:"Peradeniya",    lat:7.2690, lon:80.5942, roadType:"mountain" },
+  { route:1, name:"Kandy",         lat:7.2906, lon:80.6337, roadType:"city"     },
+
+  // ── Route 2: Colombo Fort → Galle (A2 coastal road)
+  { route:2, name:"Colombo Fort",  lat:6.9344, lon:79.8428, roadType:"city"    },
+  { route:2, name:"Dehiwala",      lat:6.8528, lon:79.8636, roadType:"city"    },
+  { route:2, name:"Moratuwa",      lat:6.7730, lon:79.8816, roadType:"main"    },
+  { route:2, name:"Panadura",      lat:6.7136, lon:79.9044, roadType:"main"    },
+  { route:2, name:"Kalutara",      lat:6.5854, lon:79.9607, roadType:"main"    },
+  { route:2, name:"Bentota",       lat:6.4210, lon:80.0004, roadType:"highway" },
+  { route:2, name:"Ambalangoda",   lat:6.2352, lon:80.0540, roadType:"highway" },
+  { route:2, name:"Hikkaduwa",     lat:6.1390, lon:80.1010, roadType:"main"    },
+  { route:2, name:"Galle",         lat:6.0535, lon:80.2210, roadType:"city"    },
+
+  // ── Route 3: Colombo Fort → Jaffna (A9 north highway)
+  { route:3, name:"Colombo Fort",  lat:6.9344, lon:79.8428, roadType:"city" },
+  { route:3, name:"Kurunegala",    lat:7.4863, lon:80.3647, roadType:"main" },
+  { route:3, name:"Dambulla",      lat:7.8742, lon:80.6511, roadType:"main" },
+  { route:3, name:"Anuradhapura",  lat:8.3114, lon:80.4037, roadType:"main" },
+  { route:3, name:"Vavuniya",      lat:8.7514, lon:80.4997, roadType:"main" },
+  { route:3, name:"Kilinochchi",   lat:9.3803, lon:80.4036, roadType:"main" },
+  { route:3, name:"Elephant Pass", lat:9.5697, lon:80.3800, roadType:"main" },
+  { route:3, name:"Jaffna",        lat:9.6615, lon:80.0255, roadType:"city" },
+
+  // ── Route 4: Colombo Fort → Matara (A2 extended south coast)
+  { route:4, name:"Colombo Fort",  lat:6.9344, lon:79.8428, roadType:"city"    },
+  { route:4, name:"Mount Lavinia", lat:6.8391, lon:79.8656, roadType:"city"    },
+  { route:4, name:"Moratuwa",      lat:6.7730, lon:79.8816, roadType:"main"    },
+  { route:4, name:"Panadura",      lat:6.7136, lon:79.9044, roadType:"main"    },
+  { route:4, name:"Kalutara",      lat:6.5854, lon:79.9607, roadType:"main"    },
+  { route:4, name:"Aluthgama",     lat:6.4342, lon:80.0024, roadType:"main"    },
+  { route:4, name:"Ambalangoda",   lat:6.2352, lon:80.0540, roadType:"main"    },
+  { route:4, name:"Galle",         lat:6.0535, lon:80.2210, roadType:"city"    },
+  { route:4, name:"Weligama",      lat:5.9741, lon:80.4296, roadType:"main"    },
+  { route:4, name:"Matara",        lat:5.9549, lon:80.5550, roadType:"city"    },
+
+  // ── Route 5: Kandy → Nuwara Eliya (B-road hill country)
+  { route:5, name:"Kandy",         lat:7.2906, lon:80.6337, roadType:"city"     },
+  { route:5, name:"Gampola",       lat:7.1642, lon:80.5767, roadType:"mountain" },
+  { route:5, name:"Nawalapitiya",  lat:7.0489, lon:80.5345, roadType:"mountain" },
+  { route:5, name:"Nuwara Eliya",  lat:6.9497, lon:80.7891, roadType:"mountain" },
 ];
 
-const BUSES_DATA = [
-    { id: 1, bus_number: "NB-1234", route_id: 1, status: "ACTIVE", current_trip_id: null },
-    { id: 2, bus_number: "NC-5678", route_id: 1, status: "ACTIVE", current_trip_id: null },
-    { id: 3, bus_number: "WP-9012", route_id: 1, status: "ACTIVE", current_trip_id: null },
-    { id: 4, bus_number: "SP-3456", route_id: 2, status: "ACTIVE", current_trip_id: null },
-    { id: 5, bus_number: "SP-7890", route_id: 2, status: "ACTIVE", current_trip_id: null },
-    { id: 6, bus_number: "NP-1111", route_id: 3, status: "ACTIVE", current_trip_id: null },
-    { id: 7, bus_number: "NP-2222", route_id: 3, status: "ACTIVE", current_trip_id: null },
-    { id: 8, bus_number: "SG-4444", route_id: 4, status: "ACTIVE", current_trip_id: null },
-    { id: 9, bus_number: "CP-5555", route_id: 5, status: "ACTIVE", current_trip_id: null },
-    { id: 10, bus_number: "CP-6666", route_id: 5, status: "ACTIVE", current_trip_id: null }
+// km/h speed envelope [min, max] per road type
+const ROAD_SPEEDS = {
+  highway:  [65, 85],
+  main:     [38, 60],
+  mountain: [16, 30],
+  city:     [10, 22],
+};
+
+/**
+ * Sri Lanka monthly rain probability [Jan=0 … Dec=11].
+ * SW monsoon peaks Jun-Sep; NE monsoon Nov-Jan; inter-monsoon Apr-May & Oct.
+ */
+const MONTHLY_RAIN_PROB = [0.30, 0.15, 0.12, 0.22, 0.40, 0.58, 0.65, 0.60, 0.48, 0.44, 0.42, 0.35];
+
+/**
+ * Known recurring event dates that cause stop-level congestion.
+ * month is 0-indexed. extraDelaySec = mean extra seconds added at that stop.
+ */
+const ANNUAL_EVENTS = [
+  // Kandy Esala Perahera (August)
+  { month:7, day:5,  stop:"Kandy",        extraDelaySec:900  },
+  { month:7, day:6,  stop:"Kandy",        extraDelaySec:1200 },
+  { month:7, day:7,  stop:"Kandy",        extraDelaySec:1500 },
+  { month:7, day:8,  stop:"Kandy",        extraDelaySec:1200 },
+  { month:7, day:9,  stop:"Kandy",        extraDelaySec:900  },
+  // Sinhala & Tamil New Year (April 13-14)
+  { month:3, day:13, stop:"Colombo Fort", extraDelaySec:1100 },
+  { month:3, day:14, stop:"Colombo Fort", extraDelaySec:1100 },
+  // Thai Pongal (January 15)
+  { month:0, day:15, stop:"Colombo Fort", extraDelaySec:600  },
+  // Deepavali (November)
+  { month:10, day:5, stop:"Jaffna",       extraDelaySec:700  },
+  // Christmas (December 25)
+  { month:11, day:25,stop:"Colombo Fort", extraDelaySec:450  },
+  // Galle Literary Festival (January)
+  { month:0, day:20, stop:"Galle",        extraDelaySec:500  },
+  // Nuwara Eliya Hill Country Festival (September)
+  { month:8, day:18, stop:"Nuwara Eliya", extraDelaySec:500  },
+  // Anuradhapura Poson Poya (June)
+  { month:5, day:3,  stop:"Anuradhapura", extraDelaySec:800  },
+  { month:5, day:4,  stop:"Anuradhapura", extraDelaySec:800  },
 ];
 
-// Each route has 3 trips: Morning, Afternoon, Evening
-const TRIPS_DATA = [
-    { id: 1, route_id: 1, trip_name: "trip-1", start_time: "05:00:00", end_time: "06:20:00", bus_id: 1 },
-    { id: 2, route_id: 1, trip_name: "trip-2", start_time: "08:00:00", end_time: "09:20:00", bus_id: 2 },
-    { id: 3, route_id: 1, trip_name: "trip-3", start_time: "11:00:00", end_time: "12:20:00", bus_id: 3 },
-    { id: 4, route_id: 1, trip_name: "trip-4", start_time: "14:00:00", end_time: "15:20:00", bus_id: 1 },
-    { id: 5, route_id: 1, trip_name: "trip-5", start_time: "17:00:00", end_time: "18:20:00", bus_id: 2 },
-    { id: 6, route_id: 2, trip_name: "trip-6", start_time: "05:00:00", end_time: "06:20:00", bus_id: 4 },
-    { id: 7, route_id: 2, trip_name: "trip-7", start_time: "08:00:00", end_time: "09:20:00", bus_id: 5 },
-    { id: 8, route_id: 2, trip_name: "trip-8", start_time: "11:00:00", end_time: "12:20:00", bus_id: 4 },
-    { id: 9, route_id: 2, trip_name: "trip-9", start_time: "14:00:00", end_time: "15:20:00", bus_id: 5 },
-    { id: 10, route_id: 2, trip_name: "trip-10", start_time: "17:00:00", end_time: "18:20:00", bus_id: 4 },
-    { id: 11, route_id: 3, trip_name: "trip-11", start_time: "05:00:00", end_time: "06:40:00", bus_id: 6 },
-    { id: 12, route_id: 3, trip_name: "trip-12", start_time: "08:00:00", end_time: "09:40:00", bus_id: 7 },
-    { id: 13, route_id: 3, trip_name: "trip-13", start_time: "11:00:00", end_time: "12:40:00", bus_id: 6 },
-    { id: 14, route_id: 3, trip_name: "trip-14", start_time: "14:00:00", end_time: "15:40:00", bus_id: 7 },
-    { id: 15, route_id: 3, trip_name: "trip-15", start_time: "17:00:00", end_time: "18:40:00", bus_id: 6 },
-    { id: 16, route_id: 4, trip_name: "trip-16", start_time: "05:00:00", end_time: "06:20:00", bus_id: 8 },
-    { id: 17, route_id: 4, trip_name: "trip-17", start_time: "08:00:00", end_time: "09:20:00", bus_id: 8 },
-    { id: 18, route_id: 4, trip_name: "trip-18", start_time: "11:00:00", end_time: "12:20:00", bus_id: 8 },
-    { id: 19, route_id: 4, trip_name: "trip-19", start_time: "14:00:00", end_time: "15:20:00", bus_id: 8 },
-    { id: 20, route_id: 4, trip_name: "trip-20", start_time: "17:00:00", end_time: "18:20:00", bus_id: 8 },
-    { id: 21, route_id: 5, trip_name: "trip-21", start_time: "05:00:00", end_time: "06:00:00", bus_id: 9 },
-    { id: 22, route_id: 5, trip_name: "trip-22", start_time: "08:00:00", end_time: "09:00:00", bus_id: 10 },
-    { id: 23, route_id: 5, trip_name: "trip-23", start_time: "11:00:00", end_time: "12:00:00", bus_id: 9 },
-    { id: 24, route_id: 5, trip_name: "trip-24", start_time: "14:00:00", end_time: "15:00:00", bus_id: 10 },
-    { id: 25, route_id: 5, trip_name: "trip-25", start_time: "17:00:00", end_time: "18:00:00", bus_id: 9 }
-];
-
-// Helper functions
-function generateDeviceId() {
-    return `DEVICE-${Math.random().toString(36).substring(2, 15)}`;
-}
-
-function parseCSVLine(line) {
-    const values = [];
-    let current = '';
-    let inQuotes = false;
-
-    for (let char of line) {
-        if (char === '"') {
-            inQuotes = !inQuotes;
-        } else if (char === ',' && !inQuotes) {
-            values.push(current.trim());
-            current = '';
-        } else {
-            current += char;
-        }
-    }
-    values.push(current.trim());
-    return values;
-}
-
-async function clearDatabase() {
-    console.log("\n🗑️  Clearing existing data...");
-
-    try {
-        await pool.query("DELETE FROM arrivals;");
-        console.log("  ✓ Cleared arrivals");
-
-        await pool.query("DELETE FROM segment_times;");
-        console.log("  ✓ Cleared segment_times");
-
-        await pool.query("DELETE FROM trip_schedules;");
-        console.log("  ✓ Cleared trip_schedules");
-
-        await pool.query("DELETE FROM shedules;");
-        console.log("  ✓ Cleared shedules");
-
-        await pool.query("DELETE FROM users;");
-        console.log("  ✓ Cleared users");
-
-        await pool.query("UPDATE buses SET current_trip_id = NULL;");
-        await pool.query("DELETE FROM buses;");
-        console.log("  ✓ Cleared buses");
-
-        await pool.query("DELETE FROM trips;");
-        console.log("  ✓ Cleared trips");
-
-        await pool.query("DELETE FROM stops;");
-        console.log("  ✓ Cleared stops");
-
-        await pool.query("DELETE FROM routes;");
-        console.log("  ✓ Cleared routes");
-
-        // Reset sequences
-        await pool.query("ALTER SEQUENCE routes_id_seq RESTART WITH 1;");
-        await pool.query("ALTER SEQUENCE stops_id_seq RESTART WITH 1;");
-        await pool.query("ALTER SEQUENCE buses_id_seq RESTART WITH 1;");
-        await pool.query("ALTER SEQUENCE users_id_seq RESTART WITH 1;");
-        await pool.query("ALTER SEQUENCE shedules_id_seq RESTART WITH 1;");
-        await pool.query("ALTER SEQUENCE segment_times_id_seq RESTART WITH 1;");
-        await pool.query("ALTER SEQUENCE arrivals_id_seq RESTART WITH 1;");
-        await pool.query("ALTER SEQUENCE trips_id_seq RESTART WITH 1;");
-        await pool.query("ALTER SEQUENCE trip_schedules_id_seq RESTART WITH 1;");
-
-        console.log("  ✓ Reset all sequences\n");
-    } catch (error) {
-        console.error("Error clearing database:", error.message);
-        throw error;
-    }
-}
+/* ═══════════════════════════ seed: static tables ═══════════════════════════ */
 
 async function seedRoutes() {
-    console.log("🚌 Seeding routes...");
-
-    for (const route of ROUTES_DATA) {
-        await pool.query(
-            "INSERT INTO routes (id, route_number, name, start_city, end_city) VALUES ($1, $2, $3, $4, $5);",
-            [route.id, route.route_number, route.name, route.start_city, route.end_city]
-        );
-    }
-
-    console.log(`  ✓ Inserted ${ROUTES_DATA.length} routes\n`);
+  for (const r of ROUTES) {
+    await pool.query(
+      `INSERT INTO routes(id, route_number, name, start_city, end_city)
+       VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,
+      [r.id, r.number, r.name, r.start, r.end]
+    );
+  }
+  console.log("  routes ✓");
 }
 
 async function seedStops() {
-    console.log("🛑 Seeding stops...");
-
-    for (const stop of STOPS_DATA) {
-        await pool.query(
-            "INSERT INTO stops (id, route_id, name, latitude, longitude, sequence) VALUES ($1, $2, $3, $4, $5, $6);",
-            [stop.id, stop.route_id, stop.name, stop.latitude, stop.longitude, stop.sequence]
-        );
-    }
-
-    console.log(`  ✓ Inserted ${STOPS_DATA.length} stops\n`);
+  const seq = {};
+  for (const s of STOPS_DATA) {
+    if (!seq[s.route]) seq[s.route] = 1;
+    await pool.query(
+      `INSERT INTO stops(route_id, name, latitude, longitude, sequence) VALUES($1,$2,$3,$4,$5)`,
+      [s.route, s.name, s.lat, s.lon, seq[s.route]++]
+    );
+  }
+  console.log("  stops ✓");
 }
 
 async function seedBuses() {
-    console.log("🚐 Seeding buses...");
-
-    for (const bus of BUSES_DATA) {
-        await pool.query(
-            "INSERT INTO buses (id, bus_number, route_id, status, current_trip_id) VALUES ($1, $2, $3, $4, $5);",
-            [bus.id, bus.bus_number, bus.route_id, bus.status, bus.current_trip_id]
-        );
+  let id = 1;
+  for (let route = 1; route <= 5; route++) {
+    for (let i = 0; i < 2; i++) {
+      await pool.query(
+        `INSERT INTO buses(id, bus_number, route_id, status) VALUES($1,$2,$3,'ACTIVE')`,
+        [id, `BUS-${route}-${i}`, route]
+      );
+      id++;
     }
-
-    console.log(`  ✓ Inserted ${BUSES_DATA.length} buses\n`);
-}
-
-async function seedUsers() {
-    console.log("👥 Seeding users...");
-
-    const userCount = 20;
-    for (let i = 0; i < userCount; i++) {
-        await pool.query(
-            "INSERT INTO users (device_id, email, password_hash, username, role) VALUES ($1, $2, $3, $4, $5);",
-            [generateDeviceId(), `user${i}@example.com`, `dummy_hash`, `User${i}`, `user`]
-        );
-    }
-
-    console.log(`  ✓ Inserted ${userCount} users\n`);
-}
-
-async function seedTrips() {
-    console.log("🚍 Seeding trips...");
-
-    for (const trip of TRIPS_DATA) {
-        await pool.query(
-            "INSERT INTO trips (id, route_id, trip_name, start_time, end_time, bus_id) VALUES ($1, $2, $3, $4, $5, $6);",
-            [trip.id, trip.route_id, trip.trip_name, trip.start_time, trip.end_time, trip.bus_id]
-        );
-    }
-
-    console.log(`  ✓ Inserted ${TRIPS_DATA.length} trips\n`);
-}
-
-async function seedTripSchedules() {
-    console.log("📆 Seeding trip schedules...");
-
-    let scheduleCount = 0;
-
-    for (const trip of TRIPS_DATA) {
-        const routeStops = STOPS_DATA.filter(s => s.route_id === trip.route_id);
-
-        // Parse start time to calculate stop times
-        const [startHour, startMin] = trip.start_time.split(':').map(Number);
-        let currentMinutes = startHour * 60 + startMin;
-
-        for (let i = 0; i < routeStops.length; i++) {
-            const stop = routeStops[i];
-            const hours = Math.floor(currentMinutes / 60);
-            const minutes = currentMinutes % 60;
-            const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:00`;
-
-            await pool.query(
-                "INSERT INTO trip_schedules (trip_id, stop_id, scheduled_arrival_time, stop_sequence) VALUES ($1, $2, $3, $4);",
-                [trip.id, stop.id, timeStr, i + 1]
-            );
-            scheduleCount++;
-
-            currentMinutes += 12; // 12 minutes between stops
-        }
-    }
-
-    console.log(`  ✓ Inserted ${scheduleCount} trip schedules\n`);
-}
-
-async function seedSchedules() {
-    console.log("📅 Seeding schedules (legacy)...");
-
-    let scheduleCount = 0;
-
-    // Generate schedules for each stop on each route
-    for (const route of ROUTES_DATA) {
-        const routeStops = STOPS_DATA.filter(s => s.route_id === route.id);
-
-        // Morning schedule (6:00 AM start)
-        let currentTime = 6 * 60; // minutes from midnight
-        for (const stop of routeStops) {
-            const hours = Math.floor(currentTime / 60);
-            const minutes = currentTime % 60;
-            const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:00`;
-
-            await pool.query(
-                "INSERT INTO shedules (route_id, stop_id, sheduled_arrival_time, day_type) VALUES ($1, $2, $3, $4);",
-                [route.id, stop.id, timeStr, 'weekday']
-            );
-            scheduleCount++;
-
-            currentTime += 15; // 15 minutes between stops
-        }
-
-        // Afternoon schedule (14:00 PM start)
-        currentTime = 14 * 60;
-        for (const stop of routeStops) {
-            const hours = Math.floor(currentTime / 60);
-            const minutes = currentTime % 60;
-            const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:00`;
-
-            await pool.query(
-                "INSERT INTO shedules (route_id, stop_id, sheduled_arrival_time, day_type) VALUES ($1, $2, $3, $4);",
-                [route.id, stop.id, timeStr, 'weekday']
-            );
-            scheduleCount++;
-
-            currentTime += 15;
-        }
-
-        // Evening schedule (20:00 PM start)
-        currentTime = 20 * 60;
-        for (const stop of routeStops) {
-            const hours = Math.floor(currentTime / 60);
-            const minutes = currentTime % 60;
-            const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:00`;
-
-            await pool.query(
-                "INSERT INTO shedules (route_id, stop_id, sheduled_arrival_time, day_type) VALUES ($1, $2, $3, $4);",
-                [route.id, stop.id, timeStr, 'weekend']
-            );
-            scheduleCount++;
-
-            currentTime += 15;
-        }
-    }
-
-    console.log(`  ✓ Inserted ${scheduleCount} schedules\n`);
+  }
+  console.log("  buses ✓");
 }
 
 async function seedSegmentTimes() {
-    console.log("⏱️  Seeding segment times...");
+  const { rows: stops } = await pool.query(`SELECT * FROM stops ORDER BY route_id, sequence`);
 
-    let segmentCount = 0;
+  for (let i = 0; i < stops.length - 1; i++) {
+    const s1 = stops[i], s2 = stops[i + 1];
+    if (s1.route_id !== s2.route_id) continue;
 
-    // Create segment times for consecutive stops on each route
-    for (const route of ROUTES_DATA) {
-        const routeStops = STOPS_DATA.filter(s => s.route_id === route.id).sort((a, b) => a.sequence - b.sequence);
+    const meta = STOPS_DATA.find(
+      (s) => s.route === s1.route_id && s.name === s1.name
+    );
+    const roadType = meta ? meta.roadType : "main";
+    const [sMin, sMax] = ROAD_SPEEDS[roadType];
 
-        for (let i = 0; i < routeStops.length - 1; i++) {
-            const fromStop = routeStops[i];
-            const toStop = routeStops[i + 1];
+    const dist   = haversine(+s1.latitude, +s1.longitude, +s2.latitude, +s2.longitude);
+    const speed  = rand(sMin, sMax);
+    const avgSec = Math.round((dist / speed) * 3600);
+    // stddev: city roads noisier; mountain roads very noisy
+    const stddevFrac = roadType === "city" ? rand(0.15, 0.28) :
+                       roadType === "mountain" ? rand(0.20, 0.35) : rand(0.08, 0.18);
+    const stddev = Math.round(avgSec * stddevFrac);
 
-            // Average travel time between stops (10-20 minutes)
-            const avgSeconds = 600 + Math.floor(Math.random() * 600);
-            const stddevSeconds = Math.floor(avgSeconds * 0.15); // 15% variation
-            const sampleCount = 50 + Math.floor(Math.random() * 50);
+    await pool.query(
+      `INSERT INTO segment_times(route_id, from_stop_id, to_stop_id,
+         avg_travel_seconds, stddev_travel_seconds, sample_count)
+       VALUES($1,$2,$3,$4,$5,$6)`,
+      [s1.route_id, s1.id, s2.id, avgSec, stddev, randInt(200, 900)]
+    );
+  }
+  console.log("  segment_times ✓");
+}
 
-            await pool.query(
-                "INSERT INTO segment_times (route_id, from_stop_id, to_stop_id, avg_travel_seconds, stddev_travel_seconds, sample_count) VALUES ($1, $2, $3, $4, $5, $6);",
-                [route.id, fromStop.id, toStop.id, avgSeconds, stddevSeconds, sampleCount]
-            );
-            segmentCount++;
-        }
+async function seedTrips() {
+  const { rows: buses } = await pool.query(`SELECT * FROM buses`);
+  for (const bus of buses) {
+    for (let i = 0; i < 12; i++) {
+      const h = 5 + i;
+      await pool.query(
+        `INSERT INTO trips(route_id, bus_id, trip_name, start_time, end_time) VALUES($1,$2,$3,$4,$5)`,
+        [bus.route_id, bus.id, `Trip-${bus.id}-${i}`, `${pad2(h)}:00`, `${pad2(h + 4)}:00`]
+      );
     }
+  }
+  console.log("  trips ✓");
+}
 
-    console.log(`  ✓ Inserted ${segmentCount} segment times\n`);
+async function seedTripSchedules() {
+  const { rows: trips } = await pool.query(`SELECT * FROM trips`);
+  const { rows: stops } = await pool.query(`SELECT * FROM stops`);
+  for (const trip of trips) {
+    const routeStops = stops.filter((s) => s.route_id === trip.route_id);
+    for (const stop of routeStops) {
+      const mins = stop.sequence * 20;
+      await pool.query(
+        `INSERT INTO trip_schedules(trip_id, stop_id, scheduled_arrival_time, stop_sequence)
+         VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
+        [trip.id, stop.id, toTimeStr(6 + Math.floor(mins / 60), mins % 60), stop.sequence]
+      );
+    }
+  }
+  console.log("  trip_schedules ✓");
+}
+
+async function seedSchedules() {
+  const { rows: stops } = await pool.query(`SELECT * FROM stops`);
+  for (const stop of stops) {
+    await pool.query(
+      `INSERT INTO shedules(route_id, stop_id, sheduled_arrival_time, day_type) VALUES($1,$2,$3,'weekday')`,
+      [stop.route_id, stop.id, `${pad2(6 + stop.sequence)}:00`]
+    );
+  }
+  console.log("  shedules ✓");
+}
+
+/* ═══════════════════════════ arrivals: realistic simulation ═══════════════════════════ */
+
+/**
+ * Returns a delay-scaling multiplier for the given hour of day.
+ * Models morning rush, lunch bump, and evening rush.
+ */
+function rushMultiplier(hour, minute = 0) {
+  const t = hour + minute / 60;
+  if (t >= 7.0  && t <= 9.5)  return rand(1.8, 3.5);  // morning rush
+  if (t >= 11.5 && t <= 13.0) return rand(1.1, 1.4);  // lunch
+  if (t >= 16.0 && t <= 19.5) return rand(1.5, 3.0);  // evening rush
+  if (t < 6.5)                return rand(0.5, 0.85); // early morning – sparse traffic
+  return 1.0;
+}
+
+/**
+ * Additional delay (seconds) caused by weather on a given road type.
+ */
+function weatherDelaySec(weather, roadType) {
+  const base = {
+    heavy_rain: { city: rand(90, 240), main: rand(60, 150), mountain: rand(120, 320), highway: rand(40, 100) },
+    rain:       { city: rand(30, 90),  main: rand(20, 70),  mountain: rand(50, 150), highway: rand(15, 45)  },
+    cloudy:     { city: rand(0, 15),   main: rand(0, 10),   mountain: rand(0, 20),   highway: rand(0, 8)   },
+    clear:      { city: 0,             main: 0,             mountain: 0,             highway: 0            },
+  };
+  return (base[weather] || base.clear)[roadType] || 0;
 }
 
 async function seedArrivals() {
-    console.log("📍 Seeding arrivals from CSV...");
+  const { rows: buses } = await pool.query(`SELECT * FROM buses`);
+  const { rows: allStops } = await pool.query(`SELECT * FROM stops ORDER BY route_id, sequence`);
+  const { rows: segments } = await pool.query(`SELECT * FROM segment_times`);
 
-    try {
-        const csvPath = path.join(__dirname, "../../ml/data/arrivals/arrivals.csv");
+  // segment lookup: "routeId_fromStopId" → segment row
+  const segMap = {};
+  for (const seg of segments) segMap[`${seg.route_id}_${seg.from_stop_id}`] = seg;
 
-        if (!fs.existsSync(csvPath)) {
-            console.log("  ⚠️  arrivals.csv not found, skipping CSV import");
-            return;
-        }
+  // stops grouped by route_id
+  const stopsByRoute = {};
+  for (const s of allStops) {
+    (stopsByRoute[s.route_id] ??= []).push(s);
+  }
 
-        const csvContent = fs.readFileSync(csvPath, "utf-8");
-        const lines = csvContent.split("\n").filter(line => line.trim());
+  // Trip start hours (templates); weekends drop off-peak slots
+  const WEEKDAY_STARTS = [5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20];
+  const WEEKEND_STARTS = [6,8,10,12,14,16,18,20];
 
-        // Skip header
-        const dataLines = lines.slice(1);
-        let insertCount = 0;
-        let skipCount = 0;
+  // Build event lookup: "month_day" → [{ stop, extraDelaySec }]
+  const eventMap = {};
+  for (const ev of ANNUAL_EVENTS) {
+    const key = `${ev.month}_${ev.day}`;
+    (eventMap[key] ??= []).push(ev);
+  }
 
-        for (const line of dataLines) {
-            if (!line.trim()) continue;
+  const NUM_DAYS  = 60;              // 60 days ≈ 130k+ arrivals
+  const BASE_DATE = new Date("2024-07-01T00:00:00Z");
+  const BATCH     = 1000;
+  let batch = [], total = 0;
 
-            const values = parseCSVLine(line);
-            if (values.length < 34) continue;
-
-            // Safely map busId and stopId to our valid ranges (1-10 for buses, 1-25 for stops)
-            const safeBusId = (parseInt(values[0]) % 10) + 1;
-            const safeStopId = (parseInt(values[1]) % 25) + 1;
-            const arrivalTime = parseInt(values[2]);
-
-            // Skip invalid data
-            if (!safeBusId || !safeStopId || !arrivalTime) {
-                skipCount++;
-                continue;
-            }
-
-            // Convert timestamp to Date
-            let arrivedAt;
-            if (arrivalTime > 1000000000000) {
-                // Milliseconds
-                arrivedAt = new Date(arrivalTime);
-            } else {
-                // Seconds
-                arrivedAt = new Date(arrivalTime * 1000);
-            }
-
-            // Extract weather and traffic data from CSV
-            const rainMm = parseFloat(values[27]) || 0;
-            const snowMm = parseFloat(values[28]) || 0;
-            const temperature = parseFloat(values[29]) || 20;
-            const windSpeed = parseFloat(values[30]) || 0;
-            const humidity = parseFloat(values[31]) || 50;
-
-            // Determine weather condition
-            let weather = "Clear";
-            if (rainMm > 0) weather = "Rain";
-            else if (snowMm > 0) weather = "Snow";
-            else if (humidity > 80) weather = "Clouds";
-
-            // Determine traffic level (simplified)
-            const hourOfDay = parseInt(values[38]) || 0;
-            let trafficLevel = "Low";
-            if (hourOfDay >= 7 && hourOfDay <= 9) trafficLevel = "High";
-            else if (hourOfDay >= 17 && hourOfDay <= 19) trafficLevel = "High";
-            else if (hourOfDay >= 10 && hourOfDay <= 16) trafficLevel = "Medium";
-
-            // Calculate delay (simplified - using some feature from CSV)
-            const delaySeconds = Math.floor(Math.random() * 300) - 150; // -150 to +150 seconds
-
-            // Get scheduled time (simplified)
-            const scheduledHour = hourOfDay;
-            const scheduledMinute = Math.floor(Math.random() * 60);
-            const scheduledTime = `${scheduledHour.toString().padStart(2, '0')}:${scheduledMinute.toString().padStart(2, '0')}:00`;
-
-            try {
-                await pool.query(
-                    `INSERT INTO arrivals (bus_id, stop_id, scheduled_time, delay_seconds, weather, traffic_level, event_nearby, arrived_at)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8);`,
-                    [safeBusId, safeStopId, scheduledTime, delaySeconds, weather, trafficLevel, false, arrivedAt]
-                );
-                insertCount++;
-            } catch (err) {
-                skipCount++;
-            }
-        }
-
-        console.log(`  ✓ Inserted ${insertCount} arrivals from CSV`);
-        if (skipCount > 0) {
-            console.log(`  ⚠️  Skipped ${skipCount} invalid/duplicate entries\n`);
-        } else {
-            console.log("");
-        }
-    } catch (error) {
-        console.error("  ✗ Error seeding arrivals:", error.message);
+  async function flushBatch() {
+    if (!batch.length) return;
+    const placeholders = [];
+    const params = [];
+    let p = 1;
+    for (const row of batch) {
+      placeholders.push(`($${p},$${p+1},$${p+2},$${p+3},$${p+4},$${p+5},$${p+6},$${p+7})`);
+      params.push(...row);
+      p += 8;
     }
+    await pool.query(
+      `INSERT INTO arrivals(bus_id,stop_id,scheduled_time,delay_seconds,
+         weather,traffic_level,event_nearby,arrived_at)
+       VALUES ${placeholders.join(",")}`,
+      params
+    );
+    batch = [];
+  }
+
+  for (let day = 0; day < NUM_DAYS; day++) {
+    const date = new Date(BASE_DATE);
+    date.setUTCDate(BASE_DATE.getUTCDate() + day);
+
+    const month      = date.getUTCMonth();   // 0-11
+    const dayOfMonth = date.getUTCDate();
+    const dayOfWeek  = date.getUTCDay();     // 0=Sun
+    const isWeekend  = dayOfWeek === 0 || dayOfWeek === 6;
+
+    /* ── Day-level weather ── */
+    const rainProb = MONTHLY_RAIN_PROB[month];
+    const rw = Math.random();
+    const dayWeather =
+      rw < rainProb * 0.30 ? "heavy_rain" :
+      rw < rainProb        ? "rain"       :
+      rw < rainProb + 0.20 ? "cloudy"     : "clear";
+
+    /* ── Events active today ── */
+    const todayEvents = eventMap[`${month}_${dayOfMonth}`] || [];
+
+    const tripStarts = isWeekend ? WEEKEND_STARTS : WEEKDAY_STARTS;
+
+    for (const bus of buses) {
+      const routeStops = stopsByRoute[bus.route_id];
+      if (!routeStops || !routeStops.length) continue;
+
+      for (const startHour of tripStarts) {
+
+        /* ─────────────────────────────────────────────────────────────────
+         *  TRIP SIMULATION — propagating delay model
+         *
+         *  runningDelay represents the bus's accumulated lateness (seconds).
+         *  At each stop the bus inherits delay from the previous stop
+         *  (wave propagation), plus per-segment noise, weather impact, rush
+         *  hour pressure, and random incidents.  Natural recovery at stops
+         *  (passengers board/alight, driver catches up) is modelled by a
+         *  small damping factor.
+         * ───────────────────────────────────────────────────────────────── */
+        let runningDelay = randNormal(0, 45); // small departure variance
+
+        for (let si = 0; si < routeStops.length; si++) {
+          const stop = routeStops[si];
+
+          const meta = STOPS_DATA.find(
+            (s) => s.route === bus.route_id && s.name === stop.name
+          );
+          const roadType = meta ? meta.roadType : "main";
+
+          // Scheduled time for this stop on this trip
+          const schedMins = stop.sequence * 18;                  // ~18 min avg dwell between stops
+          const schedH    = startHour + Math.floor(schedMins / 60);
+          const schedM    = schedMins % 60;
+          const scheduledTimeStr = toTimeStr(schedH, schedM);
+
+          // Rush factor at the scheduled hour
+          const rush = rushMultiplier(schedH, schedM);
+
+          // Weather-induced segment delay
+          const wDelay = weatherDelaySec(dayWeather, roadType);
+
+          // Segment-specific noise (uses stddev from segment_times)
+          const seg = segMap[`${bus.route_id}_${stop.id}`];
+          const segStd = seg ? +seg.stddev_travel_seconds : 90;
+          let segNoise = randNormal(0, segStd * 0.25) * rush;
+
+          // Random incidents: breakdown/accident ~0.4 % per stop-visit
+          if (Math.random() < 0.004) {
+            segNoise += randInt(300, 1200); // 5–20 min incident
+          }
+
+          // Accumulate
+          runningDelay += segNoise + wDelay;
+
+          /* ── Event spike at this stop ── */
+          const ev = todayEvents.find((e) => e.stop === stop.name);
+          let eventNearby = false;
+          if (ev) {
+            eventNearby = true;
+            runningDelay += ev.extraDelaySec * rand(0.6, 1.4);
+          }
+
+          /* ── Natural recovery at stop (passengers, driver catch-up) ── */
+          if (si === 0) {
+            // At origin: clamp initial delay, fresh departure
+            runningDelay = clamp(runningDelay, -90, 180);
+          } else if (runningDelay > 0) {
+            // Each stop absorbs ~5-14 % of accumulated delay
+            runningDelay *= rand(0.86, 0.95);
+          } else {
+            // Early buses slow down slightly to respect schedule
+            runningDelay = clamp(runningDelay, -120, 0);
+          }
+
+          const finalDelay = Math.round(runningDelay);
+
+          /* ── Derive traffic_level from conditions ── */
+          const trafficLevel =
+            rush > 2.5 || finalDelay > 600 ? "high"   :
+            rush > 1.5 || finalDelay > 200 ? "medium" : "low";
+
+          /* ── Build arrived_at timestamp ── */
+          const arrivedAt = new Date(date);
+          arrivedAt.setUTCHours(schedH % 24, schedM, 0, 0);
+          arrivedAt.setUTCSeconds(arrivedAt.getUTCSeconds() + Math.max(finalDelay, -300));
+
+          batch.push([
+            bus.id,
+            stop.id,
+            scheduledTimeStr,
+            finalDelay,
+            dayWeather,
+            trafficLevel,
+            eventNearby,
+            arrivedAt.toISOString(),
+          ]);
+          total++;
+        } // stops loop
+
+        if (batch.length >= BATCH) await flushBatch();
+      } // trip starts loop
+    } // buses loop
+
+    if (day % 5 === 0) {
+      await flushBatch();
+      process.stdout.write(`\r  arrivals: day ${day + 1}/${NUM_DAYS}  (${total.toLocaleString()} rows)`);
+    }
+  } // days loop
+
+  await flushBatch();
+  console.log(`\n  arrivals ✓  total = ${total.toLocaleString()}`);
 }
 
-async function seed() {
-    console.log("\n═══════════════════════════════════════");
-    console.log("   DATABASE SEEDING SCRIPT");
-    console.log("═══════════════════════════════════════\n");
+/* ═══════════════════════════ occupancy: realistic ═══════════════════════════ */
 
-    try {
-        await clearDatabase();
-        await seedRoutes();
-        await seedStops();
-        await seedBuses();
-        await seedTrips();
-        await seedUsers();
-        await seedTripSchedules();  // New: seed trip schedules
-        await seedSchedules();      // Legacy schedules (for backward compat)
-        await seedSegmentTimes();
-        await seedArrivals();
+async function seedOccupancy() {
+  const { rows: buses } = await pool.query(`SELECT * FROM buses`);
+  const { rows: allStops } = await pool.query(`SELECT * FROM stops`);
 
-        // Print summary
-        console.log("═══════════════════════════════════════");
-        console.log("   SEEDING COMPLETED SUCCESSFULLY! ✨");
-        console.log("═══════════════════════════════════════\n");
+  const stopsByRoute = {};
+  for (const s of allStops) (stopsByRoute[s.route_id] ??= []).push(s);
 
-        const counts = await Promise.all([
-            pool.query("SELECT COUNT(*) FROM routes"),
-            pool.query("SELECT COUNT(*) FROM stops"),
-            pool.query("SELECT COUNT(*) FROM buses"),
-            pool.query("SELECT COUNT(*) FROM users"),
-            pool.query("SELECT COUNT(*) FROM trips"),
-            pool.query("SELECT COUNT(*) FROM trip_schedules"),
-            pool.query("SELECT COUNT(*) FROM shedules"),
-            pool.query("SELECT COUNT(*) FROM segment_times"),
-            pool.query("SELECT COUNT(*) FROM arrivals")
-        ]);
+  const BATCH = 500, TOTAL = 30_000;
+  let batch = [], total = 0;
 
-        console.log("📊 Final row counts:");
-        console.log(`   Routes:          ${counts[0].rows[0].count}`);
-        console.log(`   Stops:           ${counts[1].rows[0].count}`);
-        console.log(`   Buses:           ${counts[2].rows[0].count}`);
-        console.log(`   Users:           ${counts[3].rows[0].count}`);
-        console.log(`   Trips:           ${counts[4].rows[0].count}`);
-        console.log(`   Trip Schedules:  ${counts[5].rows[0].count}`);
-        console.log(`   Schedules:       ${counts[6].rows[0].count}`);
-        console.log(`   Segment Times:   ${counts[7].rows[0].count}`);
-        console.log(`   Arrivals:        ${counts[8].rows[0].count}`);
-        console.log("\n");
-
-    } catch (error) {
-        console.error("\n❌ Seeding failed:", error.message);
-        console.error(error);
-        process.exit(1);
-    } finally {
-        await pool.end();
+  async function flush() {
+    if (!batch.length) return;
+    const ph = [], params = [];
+    let p = 1;
+    for (const r of batch) {
+      ph.push(`($${p},$${p+1},$${p+2},$${p+3},$${p+4},$${p+5},$${p+6},$${p+7},$${p+8},$${p+9},$${p+10})`);
+      params.push(...r);
+      p += 11;
     }
+    await pool.query(
+      `INSERT INTO occupancy_reports(bus_id,stop_id,occupancy_level,reporter_count,
+         avg_reporter_accuracy,scheduled_time,weather,traffic_level,
+         hour_of_day,day_of_week,is_rush_hour)
+       VALUES ${ph.join(",")}`,
+      params
+    );
+    batch = [];
+  }
+
+  for (let i = 0; i < TOTAL; i++) {
+    const bus       = choice(buses);
+    const stops     = stopsByRoute[bus.route_id] || allStops;
+    const stop      = choice(stops);
+    const hour      = randInt(5, 22);
+    const dow       = randInt(0, 7);
+    const isRush    = (hour >= 7 && hour <= 9) || (hour >= 16 && hour <= 19);
+
+    /* Occupancy level 1-5 biased by time-of-day */
+    let level;
+    if (isRush)           level = Math.random() < 0.65 ? randInt(4, 6) : randInt(2, 5);
+    else if (hour < 7 || hour > 20) level = randInt(1, 3);
+    else                  level = randInt(1, 5);
+    level = clamp(level, 1, 5);
+
+    const rain    = Math.random() < 0.30;
+    const weather = rain ? choice(["rain","heavy_rain"]) : choice(["clear","cloudy"]);
+
+    batch.push([
+      bus.id,
+      stop.id,
+      level,
+      randInt(1, 6),
+      +rand(0.3, 1.0).toFixed(4),
+      toTimeStr(hour, randInt(0, 60)),
+      weather,
+      isRush ? choice(["medium","high"]) : choice(["low","medium"]),
+      hour,
+      dow,
+      isRush,
+    ]);
+    total++;
+    if (batch.length >= BATCH) await flush();
+  }
+  await flush();
+  console.log(`  occupancy ✓  total = ${total.toLocaleString()}`);
 }
 
-seed();
+/* ═══════════════════════════ clean slate ═══════════════════════════ */
+
+async function cleanDatabase() {
+  // Drop in reverse FK dependency order, then reset sequences
+  await pool.query(`
+    TRUNCATE TABLE
+      occupancy_reports,
+      arrivals,
+      shedules,
+      trip_schedules,
+      segment_times,
+      trips,
+      buses,
+      stops,
+      routes
+    RESTART IDENTITY CASCADE;
+  `);
+  console.log("  database cleaned ✓");
+}
+
+/* ═══════════════════════════ entry point ═══════════════════════════ */
+
+async function main() {
+  console.log("\n── cleaning existing data ──");
+  await cleanDatabase();
+
+  console.log("\n── seeding static tables ──");
+  await seedRoutes();
+  await seedStops();
+  await seedBuses();
+  await seedSegmentTimes();
+  await seedTrips();
+  await seedTripSchedules();
+  await seedSchedules();
+
+  console.log("\n── simulating 60-day operation (≈130k arrivals) ──");
+  await seedArrivals();
+
+  console.log("\n── seeding occupancy reports ──");
+  await seedOccupancy();
+
+  console.log("\n✓ all done");
+  process.exit(0);
+}
+
+main().catch((err) => { console.error(err); process.exit(1); });

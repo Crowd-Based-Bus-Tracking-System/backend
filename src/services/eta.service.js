@@ -161,8 +161,39 @@ class BaseEtaService {
             segment_count: remainingStops.length - inferredPassedCount,
             inferred_passed: inferredPassedCount,
             time_since_last_arrival: timeSinceLastArrival,
-            confidence: calculateConfidence(lastConfirmedStop.minutesSinceArrival)
+            confidence: calculateConfidence(lastConfirmedStop.minutesSinceArrival),
+            segment_times: segmentTimes,
+            base_travel_time: adjustedTotalTime,
+            last_stop_id: lastConfirmedStop.stopId,
+            remaining_stops_ids: remainingStops.map(s => s.id)
         };
+    }
+
+    async logHistoricalETATrainingData(busId, targetStopId, historicalETA) {
+        try {
+            if (!historicalETA || historicalETA.eta_seconds === null || historicalETA.eta_seconds === 0) {
+                return;
+            }
+
+            const trainingData = {
+                bus_id: busId,
+                target_stop_id: targetStopId,
+                last_stop: historicalETA.last_stop_id,
+                inferred_passed: historicalETA.inferred_passed,
+                time_since_last_stop: historicalETA.time_since_last_arrival,
+                segment_times: JSON.stringify(historicalETA.segment_times || []),
+                base_travel_time: historicalETA.base_travel_time,
+                final_eta: historicalETA.eta_seconds,
+                logged_at: Date.now()
+            };
+
+            const key = `eta_training:${busId}:${targetStopId}`;
+            await redis.set(key, JSON.stringify(trainingData), "EX", 7200);
+
+            console.log(`Historical ETA training data logged for bus ${busId} -> stop ${targetStopId} (base=${Math.round(historicalETA.base_travel_time)}s, inferred_passed=${historicalETA.inferred_passed})`);
+        } catch (error) {
+            console.warn("Failed to log historical ETA training data:", error.message);
+        }
     }
 }
 
@@ -200,6 +231,8 @@ class ETAFusionEngine {
             };
         }
 
+        await this.baseEtaService.logHistoricalETATrainingData(busId, targetStopId, historicalETA);
+
         const scheduleBasedETA = await this.baseEtaService.calculateScheduleBasedETA(
             busId,
             targetStopId
@@ -207,98 +240,127 @@ class ETAFusionEngine {
 
         const mlETA = await predictETAWithML(data);
 
-        let tripDurationMinutes = 120;
-        try {
-            const tripData = await getActiveOrNextTripForBus(busId);
-            const trip = tripData?.activeTrip || tripData?.nextTrip || tripData?.firstTrip;
-            if (trip?.stops?.length >= 2) {
-                const firstStopMs = trip.stops[0].tMs;
-                const lastStopMs = trip.stops[trip.stops.length - 1].tMs;
-                tripDurationMinutes = Math.max(15, (lastStopMs - firstStopMs) / 60000);
-            }
-        } catch (e) {
-        }
-
-        const weights = this.calculateWeights(
-            lastConfirmedStop,
-            mlETA,
-            scheduleBasedETA,
-            tripDurationMinutes
-        );
-
+        const baseTravelTime = historicalETA.base_travel_time || historicalETA.eta_seconds || 0;
         let finalETA = 0;
         const methods = [];
 
-        const usable = {
-            historical: historicalETA.eta_seconds !== null && historicalETA.eta_seconds > 0 && weights.historical > 0,
-            schedule: scheduleBasedETA.eta_seconds !== 0 && weights.schedule > 0,
-            ml: !!(mlETA.mlPrediction && mlETA.confidence !== undefined && weights.ml > 0)
-        };
+        const hasML = mlETA.mlPrediction !== null && mlETA.mlPrediction !== undefined && mlETA.confidence !== undefined;
+        const hasHistorical = historicalETA.eta_seconds !== null;
+        const hasSchedule = scheduleBasedETA.eta_seconds !== null;
 
-        if (lastConfirmedStop && mlETA.mlPrediction && mlETA.confidence !== undefined && !usable.ml) {
-            const minMlFloor = 0.3;
-            weights.ml = minMlFloor;
-            usable.ml = true;
+        if (hasML && hasHistorical) {
+            const mlDelay = mlETA.mlDelay || (mlETA.mlPrediction - baseTravelTime);
+            finalETA = Math.max(0, baseTravelTime + mlDelay);
+
+            methods.push({
+                method: "baseline_plus_ml_delay",
+                base_travel_time: baseTravelTime,
+                ml_delay: mlDelay,
+                eta: finalETA,
+                ml_confidence: mlETA.confidence
+            });
+
+            if (hasSchedule && scheduleBasedETA.eta_seconds > 0) {
+                const scheduleCap = scheduleBasedETA.eta_seconds * 2;
+                const scheduleFloor = scheduleBasedETA.eta_seconds * 0.2;
+
+                const isEarlyTrip = baseTravelTime < 600 || historicalETA.inferred_passed === 0;
+                const isSmallDelay = Math.abs(mlDelay) < 900;
+
+                if (isSmallDelay || isEarlyTrip) {
+                    if (finalETA > scheduleCap && isSmallDelay) {
+                        finalETA = scheduleCap;
+                        methods.push({ method: "schedule_cap_applied", schedule_eta: scheduleBasedETA.eta_seconds });
+                    } else if (finalETA < scheduleFloor && finalETA > 0) {
+                        if (baseTravelTime > 120) {
+                            finalETA = scheduleFloor;
+                            methods.push({ method: "schedule_floor_applied", schedule_eta: scheduleBasedETA.eta_seconds });
+                        }
+                    }
+                }
+            }
+        } else if (hasHistorical) {
+            finalETA = historicalETA.eta_seconds;
+            methods.push({
+                method: "historical_fallback",
+                eta: historicalETA.eta_seconds,
+                base_travel_time: baseTravelTime
+            });
+        } else if (hasSchedule) {
+            finalETA = scheduleBasedETA.eta_seconds;
+            methods.push({
+                method: "schedule_fallback",
+                eta: scheduleBasedETA.eta_seconds
+            });
         }
 
-        let droppedWeight = 0;
-        if (!usable.historical && weights.historical > 0) droppedWeight += weights.historical;
-        if (!usable.schedule && weights.schedule > 0) droppedWeight += weights.schedule;
-        if (!usable.ml && weights.ml > 0) droppedWeight += weights.ml;
+        const confidence = this.calculateOverallConfidence(
+            { historical: hasHistorical ? 0.5 : 0, schedule: hasSchedule ? 0.2 : 0, ml: hasML ? 0.8 : 0 },
+            mlETA,
+            lastConfirmedStop
+        );
+        const uncertaintyRange = this.estimateUncertainty(finalETA, confidence);
 
-        if (droppedWeight > 0) {
-            let usableTotal = 0;
-            if (usable.historical) usableTotal += weights.historical;
-            if (usable.schedule) usableTotal += weights.schedule;
-            if (usable.ml) usableTotal += weights.ml;
+        const remainingStopsFull = await this.baseEtaService.busProgressionService.getRemainingStops(busId);
+        let routeEtas = [];
 
-            if (usableTotal > 0) {
-                const redistributionRatio = (usableTotal + droppedWeight) / usableTotal;
-                if (usable.historical) weights.historical *= redistributionRatio;
-                if (usable.schedule) weights.schedule *= redistributionRatio;
-                if (usable.ml) weights.ml *= redistributionRatio;
+        if (remainingStopsFull && remainingStopsFull.length > 0) {
+            let totalTimeFull = 0;
+            let fromStopId = lastConfirmedStop?.stopId;
+            if (!fromStopId) fromStopId = remainingStopsFull[0].id;
+
+            const segmentTimesFull = [];
+            for (const stop of remainingStopsFull) {
+                const segmentTime = await getSegmentTime(fromStopId, stop.id, routeId);
+                segmentTimesFull.push(segmentTime);
+                totalTimeFull += segmentTime;
+                fromStopId = stop.id;
             }
 
-            const reNorm = this.normalizeWeights({
-                schedule: usable.schedule ? weights.schedule : 0,
-                historical: usable.historical ? weights.historical : 0,
-                ml: usable.ml ? weights.ml : 0
-            });
-            weights.schedule = reNorm.schedule;
-            weights.historical = reNorm.historical;
-            weights.ml = reNorm.ml;
-        }
+            const timeSinceLastArrival = lastConfirmedStop ? (Date.now() - lastConfirmedStop.arrivedAt) / 1000 : 0;
+            let cumulativeTime = 0;
+            let inferredPassedCountFull = 0;
 
-        if (usable.historical) {
-            finalETA += historicalETA.eta_seconds * weights.historical;
-            methods.push({
-                method: "historical",
-                eta: historicalETA.eta_seconds,
-                weight: weights.historical
-            })
-        }
+            for (let i = 0; i < remainingStopsFull.length; i++) {
+                cumulativeTime += segmentTimesFull[i];
+                if (timeSinceLastArrival > cumulativeTime * 3) {
+                    inferredPassedCountFull = i + 1;
+                } else {
+                    break;
+                }
+            }
 
-        if (usable.schedule) {
-            finalETA += scheduleBasedETA.eta_seconds * weights.schedule;
-            methods.push({
-                method: "schedule",
-                eta: scheduleBasedETA.eta_seconds,
-                weight: weights.schedule
-            })
-        }
+            let timeConsumedToInferredPoint = 0;
+            for (let i = 0; i < inferredPassedCountFull; i++) {
+                timeConsumedToInferredPoint += segmentTimesFull[i];
+            }
+            const timeSinceInferredPoint = timeSinceLastArrival - timeConsumedToInferredPoint;
 
-        if (usable.ml) {
-            finalETA += mlETA.mlPrediction * weights.ml;
-            methods.push({
-                method: "ml",
-                eta: mlETA.mlPrediction,
-                weight: weights.ml,
-                ml_confidence: mlETA.confidence
-            })
-        }
+            let cumulativeBaseTime = 0;
+            const finalDelay = finalETA - baseTravelTime;
 
-        const confidence = this.calculateOverallConfidence(weights, mlETA, lastConfirmedStop);
-        const uncertaintyRange = this.estimateUncertainty(finalETA, confidence);
+            for (let i = 0; i < remainingStopsFull.length; i++) {
+                if (i < inferredPassedCountFull) {
+                    routeEtas.push({
+                        stop_id: remainingStopsFull[i].id,
+                        eta_seconds: 0,
+                        eta_minutes: 0,
+                        is_passed: true
+                    });
+                } else {
+                    cumulativeBaseTime += segmentTimesFull[i];
+                    let stopBaseTime = Math.max(0, cumulativeBaseTime - timeSinceInferredPoint);
+                    let stopEtaSeconds = Math.max(0, stopBaseTime + finalDelay);
+
+                    routeEtas.push({
+                        stop_id: remainingStopsFull[i].id,
+                        eta_seconds: Math.round(stopEtaSeconds),
+                        eta_minutes: Math.round(stopEtaSeconds / 60),
+                        is_passed: false
+                    });
+                }
+            }
+        }
 
         try {
             await emitBusETA(busId, targetStopId, {
@@ -333,8 +395,9 @@ class ETAFusionEngine {
             freshness_minutes: lastConfirmedStop?.minutesSinceArrival || null,
             last_confirmed_stop: lastConfirmedStop?.stopId || null,
             methods_used: methods,
-            weights: weights,
+            weights: { base_travel_time: baseTravelTime, ml_available: hasML },
             uncertainty_range: uncertaintyRange,
+            route_etas: routeEtas
         };
 
         console.log(`Final ETA Result for Bus ${busId} to Stop ${targetStopId}:`, JSON.stringify(finalResult, null, 2));

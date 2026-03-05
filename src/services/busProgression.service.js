@@ -35,9 +35,11 @@ class BusProgressionService {
 
             const lastConfirmedStop = await this.getLastConfirmedStop(busId);
 
-            const targetStopIndex = routeStops.findIndex(s => s.id === targetStopId);
+            const targetStopIndex = targetStopId
+                ? routeStops.findIndex(s => s.id === targetStopId)
+                : routeStops.length - 1;
 
-            if (targetStopIndex === -1) {
+            if (targetStopIndex === -1 && targetStopId) {
                 console.warn(`Target stop ${targetStopId} not found in route for bus ${busId}`);
                 return [];
             }

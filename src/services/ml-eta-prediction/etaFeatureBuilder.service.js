@@ -71,6 +71,14 @@ const buildETAFeatures = async (data) => {
 
     const timeFeatures = calculateTimeFeatures(now);
 
+    const baselineFeatures = await calculateBaselineFeatures(
+        busId,
+        lastCheckpoint,
+        remainingStops,
+        effectiveRouteId,
+        now
+    );
+
     return {
         bus_id: busId,
         target_stop_id: targetStopId,
@@ -90,7 +98,9 @@ const buildETAFeatures = async (data) => {
 
         ...contextFeatures,
 
-        ...reporterFeatures
+        ...reporterFeatures,
+
+        ...baselineFeatures
     };
 };
 
@@ -431,5 +441,80 @@ async function calculateDelayTrend(busId) {
         return { trend: 0, accelerating: false, perStopRate: 0 };
     }
 }
+
+
+async function calculateBaselineFeatures(busId, lastCheckpoint, remainingStops, routeId, now) {
+    const features = {
+        base_travel_time: 0,
+        inferred_passed_count: 0,
+        inferred_time_consumed: 0,
+        time_since_last_stop: 0,
+        segment_time_avg: 0,
+        remaining_segment_count: 0,
+        distance_to_target: 0,
+        scheduled_delay: 0
+    };
+
+    if (!remainingStops || remainingStops.length === 0) {
+        return features;
+    }
+
+    features.remaining_segment_count = remainingStops.length;
+    features.distance_to_target = remainingStops.length * 0.5; // approx km
+
+    const segmentTimes = [];
+    let fromStopId = lastCheckpoint?.stopId || remainingStops[0]?.id;
+    let totalTime = 0;
+
+    for (const stop of remainingStops) {
+        const segmentTime = await getSegmentTime(fromStopId, stop.id, routeId);
+        segmentTimes.push(segmentTime);
+        totalTime += segmentTime;
+        fromStopId = stop.id;
+    }
+
+    features.segment_time_avg = segmentTimes.length > 0
+        ? segmentTimes.reduce((a, b) => a + b, 0) / segmentTimes.length
+        : 0;
+
+    if (!lastCheckpoint) {
+        features.base_travel_time = totalTime;
+        return features;
+    }
+
+    const timeSinceLastArrival = (now - lastCheckpoint.arrivedAt) / 1000;
+    features.time_since_last_stop = timeSinceLastArrival;
+
+    let cumulativeTime = 0;
+    let inferredPassedCount = 0;
+
+    for (let i = 0; i < remainingStops.length; i++) {
+        cumulativeTime += segmentTimes[i];
+        if (timeSinceLastArrival > cumulativeTime * 3) {
+            inferredPassedCount = i + 1;
+        } else {
+            break;
+        }
+    }
+
+    features.inferred_passed_count = inferredPassedCount;
+
+    let timeConsumedToInferredPoint = 0;
+    for (let i = 0; i < inferredPassedCount; i++) {
+        timeConsumedToInferredPoint += segmentTimes[i];
+    }
+    features.inferred_time_consumed = timeConsumedToInferredPoint;
+
+    let adjustedTotalTime = 0;
+    for (let i = inferredPassedCount; i < segmentTimes.length; i++) {
+        adjustedTotalTime += segmentTimes[i];
+    }
+
+    const timeSinceInferredPoint = timeSinceLastArrival - timeConsumedToInferredPoint;
+    features.base_travel_time = Math.max(0, adjustedTotalTime - timeSinceInferredPoint);
+
+    return features;
+}
+
 
 export default buildETAFeatures;
