@@ -29,7 +29,7 @@ def train_eta_models(data_path=DATA_PATH):
     validation_errors = 0
     target_values = []
     
-    TARGET_COLUMN = "actual_eta_seconds"
+    TARGET_COLUMN = "delay_seconds"
     
     for idx, row in df.iterrows():
         try:
@@ -59,12 +59,17 @@ def train_eta_models(data_path=DATA_PATH):
     
     df = pd.DataFrame(validated_data)
     
+    if "actual_eta_seconds" in df.columns and "base_travel_time" in df.columns:
+        df["delay_seconds"] = df["actual_eta_seconds"] - df["base_travel_time"]
+    elif "delay_seconds" not in df.columns:
+        raise ValueError("Cannot compute delay_seconds: need either 'delay_seconds' or both 'actual_eta_seconds' and 'base_travel_time'")
+    
     FEATURE_COLUMNS = [
         field for field in ETAFeatures.model_fields
         if field not in ["bus_id", "target_stop_id", "prediction_made_at"]
     ]
     
-    TARGET_COLUMN = "actual_eta_seconds"
+    TARGET_COLUMN = "delay_seconds"
     
     if TARGET_COLUMN not in df.columns:
         raise ValueError(f"Target column '{TARGET_COLUMN}' not found in data!")

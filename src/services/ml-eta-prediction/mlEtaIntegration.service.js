@@ -19,13 +19,18 @@ export const getPendingPrediction = async (busId, stopId) => {
 
 export const predictETAWithML = async (data) => {
     try {
+        const { bus: { busId }, targetStopId } = data;
+
+        if (!targetStopId) {
+            console.log("Skipping ML prediction for general ETA query (no target stop)");
+            return { mlPrediction: null, confidence: 0, features: null };
+        }
+
         const isAvailable = await checkMLServiceHealth();
         if (!isAvailable) {
             console.warn("ML service unavailable, skipping ML ETA prediction");
             return { mlPrediction: null, confidence: 0, features: null };
         }
-
-        const { bus: { busId }, targetStopId } = data;
 
         const features = await buildETAFeatures(data);
 
@@ -37,10 +42,12 @@ export const predictETAWithML = async (data) => {
 
         const result = {
             mlPrediction: prediction.eta_seconds,
+            mlDelay: prediction.delay_seconds,
+            baseTravelTime: prediction.base_travel_time,
             confidence: prediction.confidence,
             etaMinutes: prediction.eta_minutes,
             features: features,
-            method: "ml_prediction"
+            method: "ml_delay_prediction"
         };
 
         try {
@@ -104,11 +111,14 @@ export const logPredictionAccuracy = async (busId, stopId, actualArrivalTime, pr
     const predictionMadeAt = prediction.features.prediction_made_at;
     const actualETA = (actualArrivalTime - predictionMadeAt) / 1000;
     const predictedETA = prediction.mlPrediction;
+    const baseTravelTime = prediction.baseTravelTime || prediction.features?.base_travel_time || 0;
+    const delaySeconds = actualETA - baseTravelTime;
     const error = actualETA - predictedETA;
     const absError = Math.abs(error);
 
     const trainingData = {
         ...prediction.features,
+        delay_seconds: delaySeconds,
         actual_eta_seconds: actualETA,
         predicted_eta_seconds: predictedETA,
         error_seconds: error,

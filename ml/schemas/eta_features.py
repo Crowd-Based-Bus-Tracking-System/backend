@@ -75,6 +75,15 @@ class ETAFeatures(BaseModel):
     weather_thunderstorm: int = Field(ge=0, le=1, default=0, description="1 if thunderstorm")
     weather_unknown: int = Field(ge=0, le=1, default=0, description="1 if weather unknown")
     
+    base_travel_time: float = Field(ge=0, default=0, description="Sum of remaining segment averages (seconds) — the baseline")
+    inferred_passed_count: int = Field(ge=0, default=0, description="Number of stops inferred to have been passed")
+    inferred_time_consumed: float = Field(ge=0, default=0, description="Time consumed to reach inferred position (seconds)")
+    segment_time_avg: float = Field(ge=0, default=0, description="Average segment time for remaining route")
+    time_since_last_stop: float = Field(ge=0, default=0, description="Seconds since last confirmed stop")
+    remaining_segment_count: int = Field(ge=0, default=0, description="Number of remaining segments")
+    distance_to_target: float = Field(ge=0, default=0, description="Approximate km to target")
+    scheduled_delay: float = Field(default=0, description="Delay vs schedule at last stop (seconds)")
+    
     reporters_at_target_stop: int = Field(ge=0, default=0, description="Number of reporters waiting at target stop")
     avg_reporter_accuracy_target: float = Field(ge=0, le=1, default=0.5, description="Average accuracy of reporters at target")
     recent_report_density: float = Field(ge=0, default=0, description="Reports per minute recently")

@@ -246,12 +246,17 @@ export const reportArrival = async (data) => {
 
 export const getReports = async (busId) => {
     try {
-        const reportIds = await redis.zrevrange(`bus:${busId}:global_reports`, 0, 10);
+        const twentyFourHoursAgo = Date.now() - 86400000;
+        await redis.zremrangebyscore(`bus:${busId}:global_reports`, 0, twentyFourHoursAgo);
+
+        const reportIds = await redis.zrevrange(`bus:${busId}:global_reports`, 0, 50);
         const reports = [];
         for (const id of reportIds) {
             const r = await redis.hgetall(`report:${id}`);
             if (r && Object.keys(r).length > 0) {
                 reports.push({ ...r, upvotes: parseInt(r.upvotes || 1) });
+            } else {
+                await redis.zrem(`bus:${busId}:global_reports`, id);
             }
         }
         return reports;

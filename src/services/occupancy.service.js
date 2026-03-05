@@ -180,7 +180,10 @@ export const getCurrentOccupancy = async (busId) => {
 
 export const getOccupancyReports = async (busId) => {
     try {
-        const reportIds = await redis.zrevrange(`bus:${busId}:occupancy_global_reports`, 0, 10);
+        const twentyFourHoursAgo = Date.now() - 86400000;
+        await redis.zremrangebyscore(`bus:${busId}:occupancy_global_reports`, 0, twentyFourHoursAgo);
+
+        const reportIds = await redis.zrevrange(`bus:${busId}:occupancy_global_reports`, 0, 50);
         const reports = [];
         for (const id of reportIds) {
             const r = await redis.hgetall(`occupancy_report:${id}`);
@@ -190,6 +193,8 @@ export const getOccupancyReports = async (busId) => {
                     occupancyLevel: parseInt(r.occupancyLevel || 0),
                     reportCount: parseInt(r.reportCount || 1)
                 });
+            } else {
+                await redis.zrem(`bus:${busId}:occupancy_global_reports`, id);
             }
         }
         return reports;

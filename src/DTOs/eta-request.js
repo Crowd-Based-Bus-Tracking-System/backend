@@ -6,7 +6,7 @@ export const ETAPredictionRequestSchema = z.object({
         busId: z.number().int().positive(),
         routeId: z.number().int().positive(),
     }),
-    targetStopId: z.number().int().positive(),
+    targetStopId: z.number().int().positive().nullable(),
     location: z.object({
         lat: z.number(),
         lng: z.number()
