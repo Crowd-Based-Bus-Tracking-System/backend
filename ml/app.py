@@ -45,9 +45,13 @@ def train_eta():
 
 @app.post("/predict-eta")
 def predict_eta_endpoint(data: ETAFeatures):
-    eta_seconds = predict_eta_inference(data)
+    delay_seconds = predict_eta_inference(data)
+    base_travel_time = data.base_travel_time
+    eta_seconds = max(0, base_travel_time + delay_seconds)
     
     return {
+        "delay_seconds": float(delay_seconds),
+        "base_travel_time": float(base_travel_time),
         "eta_seconds": float(eta_seconds),
         "eta_minutes": round(eta_seconds / 60, 2),
         "confidence": data.checkpoint_freshness_score

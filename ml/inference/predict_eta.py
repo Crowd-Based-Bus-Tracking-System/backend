@@ -23,6 +23,6 @@ def predict_eta(features: ETAFeatures) -> float:
 
     X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
 
-    eta = model.predict(X)[0]
+    delay = model.predict(X)[0]
 
-    return float(np.clip(eta, 0.0, 432000.0))
+    return float(np.clip(delay, -3600.0, 7200.0))

@@ -40,6 +40,8 @@ export const getRoutes = async (req, res) => {
                 };
             }));
 
+            const stopIdMapping = stopsResult.rows.map(s => s.db_id);
+
             return {
                 id: `route-${route.id}`,
                 dbId: route.id,
@@ -48,6 +50,7 @@ export const getRoutes = async (req, res) => {
                 from: route.start_city,
                 to: route.end_city,
                 color: "#10b981",
+                stopIdMapping,
                 stops: stopsResult.rows.map(s => ({
                     id: `s${s.db_id}`,
                     dbId: s.db_id,
