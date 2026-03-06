@@ -1,6 +1,7 @@
 import redis from "../config/redis.js";
 import { getSegmentTimes } from "../models/segments.js";
 import { calculateSegmentTimeFromArrivals } from "../models/arrival.js";
+import { getSegmentDistance as getSegmentDistanceFromModel } from "../models/segments.js";
 
 
 export function getScheduledTime(schedule) {
@@ -80,4 +81,29 @@ export function calculateConfidence(minutesSinceLastArrival) {
     if (minutesSinceLastArrival < 20) return 0.5;
     if (minutesSinceLastArrival < 30) return 0.3;
     return 0.1;
+}
+
+export async function getSegmentDistance(fromStopId, toStopId, routeId = null) {
+    const cacheKey = routeId
+        ? `distance:${routeId}:${fromStopId}:${toStopId}`
+        : `distance:${fromStopId}:${toStopId}`;
+
+    const cached = await redis.get(cacheKey);
+    if (cached) {
+        return parseFloat(cached);
+    }
+
+    try {
+        const distance = await getSegmentDistanceFromModel(fromStopId, toStopId, routeId);
+        
+        if (distance && distance > 0) {
+            await redis.setex(cacheKey, 86400, distance);
+            return distance;
+        }
+        
+        return null;
+    } catch (error) {
+        console.warn("Failed to get segment distance:", error.message);
+        return null;
+    }
 }
