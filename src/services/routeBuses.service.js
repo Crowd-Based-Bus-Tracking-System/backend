@@ -4,6 +4,7 @@ import { getStopById } from "../models/stops.js";
 import { ETAFusionEngine } from "./eta.service.js";
 import distanceInMeters from "../utils/geo.js";
 import { getCurrentOccupancy } from "./occupancy.service.js";
+import redis from "../config/redis.js";
 
 const etaFusionEngine = new ETAFusionEngine();
 
@@ -22,20 +23,90 @@ export const getRouteBusesSortedByETA = async (routeId, targetStopId, location) 
 
                 let etaResult;
                 if (targetStopId) {
+                    if (status.lastConfirmedStop) {
+                        const cachedRouteEtaKey = `route_eta:${bus.id}`;
+                        const cachedRouteEta = await redis.get(cachedRouteEtaKey);
+                        
+                        if (cachedRouteEta) {
+                            try {
+                                const parsedEta = JSON.parse(cachedRouteEta);
+                                const stopEta = parsedEta.find(s => s.stop_id === targetStopId);
+                                
+                                if (stopEta) {
+                                    const freshEtaResult = await etaFusionEngine.calculateFinalEta({
+                                        bus: { busId: bus.id, routeId },
+                                        targetStopId,
+                                        location
+                                    });
+                                    
+                                    const cachedMinutes = stopEta.eta_minutes;
+                                    const freshMinutes = freshEtaResult.eta_minutes;
+                                    
+                                    if (Math.abs(cachedMinutes - freshMinutes) > 5) {
+                                        console.warn(`Stale cache detected for bus ${bus.id}: cached=${cachedMinutes}m, fresh=${freshMinutes}m`);
+                                        await redis.del(cachedRouteEtaKey);
+                                        
+                                        etaResult = freshEtaResult;
+                                    } else {
+                                        etaResult = {
+                                            eta_seconds: stopEta.eta_seconds,
+                                            eta_minutes: stopEta.eta_minutes,
+                                            route_etas: parsedEta,
+                                            next_stop_eta_minutes: 0,
+                                            arrival_time: stopEta.arrival_time,
+                                            confidence: stopEta.confidence || 0.5,
+                                            methods_used: stopEta.methods_used || [{ method: 'cache_hit', eta: stopEta.eta_seconds }],
+                                            uncertainty_range: stopEta.uncertainty_range || { min: stopEta.eta_seconds * 0.9, max: stopEta.eta_seconds * 1.1 },
+                                            is_passed: stopEta.is_passed || false
+                                        };
+                                    }
+                                } else {
+                                    etaResult = {
+                                        eta_seconds: Infinity,
+                                        eta_minutes: Infinity,
+                                        route_etas: [],
+                                        next_stop_eta_minutes: 0,
+                                        arrival_time: null,
+                                        confidence: 0,
+                                        methods_used: [{ method: 'cache_miss', eta: Infinity }],
+                                        uncertainty_range: { min: Infinity, max: Infinity },
+                                        is_passed: false
+                                    };
+                                }
+                            } catch (parseError) {
+                                console.warn(`Failed to parse cached route ETA for bus ${bus.id}:`, parseError.message);
+                                etaResult = {
+                                    eta_seconds: Infinity,
+                                    eta_minutes: Infinity,
+                                    route_etas: [],
+                                    next_stop_eta_minutes: 0,
+                                    arrival_time: null,
+                                    confidence: 0,
+                                    methods_used: [{ method: 'cache_error', eta: Infinity }],
+                                    uncertainty_range: { min: Infinity, max: Infinity },
+                                    is_passed: false
+                                };
+                            }
+                        } else {
+                            etaResult = await etaFusionEngine.calculateFinalEta({
+                                bus: { busId: bus.id, routeId },
+                                targetStopId,
+                                location
+                            });
+                        }
+                    } else {
+                        etaResult = await etaFusionEngine.calculateFinalEta({
+                            bus: { busId: bus.id, routeId },
+                            targetStopId,
+                            location
+                        });
+                    }
+                } else {
                     etaResult = await etaFusionEngine.calculateFinalEta({
                         bus: { busId: bus.id, routeId },
-                        targetStopId,
+                        targetStopId: null,
                         location
                     });
-                } else {
-                    etaResult = {
-                        eta_seconds: Infinity,
-                        eta_minutes: Infinity,
-                        arrival_time: null,
-                        confidence: 0,
-                        methods_used: [],
-                        uncertainty_range: { min: Infinity, max: Infinity }
-                    };
                 }
 
                 let nextStopEtaResult = null;
@@ -91,6 +162,7 @@ export const getRouteBusesSortedByETA = async (routeId, targetStopId, location) 
                     eta: {
                         eta_seconds: etaResult.eta_seconds,
                         eta_minutes: etaResult.eta_minutes,
+                        route_etas: etaResult.route_etas,
                         next_stop_eta_minutes: nextStopEtaResult ? nextStopEtaResult.eta_minutes : 0,
                         arrival_time: etaResult.arrival_time,
                         confidence: etaResult.confidence,
