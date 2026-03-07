@@ -30,7 +30,7 @@ export const getSegmentDistance = async (fromStopId, toStopId, routeId = null) =
         if (routeId) {
             query = `
                 SELECT distance_in_meters
-                FROM segments
+                FROM segment_times
                 WHERE from_stop_id = $1 AND to_stop_id = $2 AND route_id = $3
                 LIMIT 1
             `;

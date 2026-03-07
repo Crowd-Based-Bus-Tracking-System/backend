@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS segment_times(
     route_id INT REFERENCES routes(id) ON DELETE CASCADE,
     from_stop_id INT REFERENCES stops(id) ON DELETE CASCADE,
     to_stop_id INT REFERENCES stops(id) ON DELETE CASCADE,
+    distance_in_meters INT NOT NULL,
     avg_travel_seconds INT NOT NULL,
     stddev_travel_seconds INT,
     sample_count INT DEFAULT 0,
@@ -10,3 +11,4 @@ CREATE TABLE IF NOT EXISTS segment_times(
 );
 
 CREATE INDEX IF NOT EXISTS idx_segment_times_route ON segment_times(route_id, from_stop_id);
+CREATE INDEX IF NOT EXISTS idx_segment_times_distance ON segment_times(route_id, distance_in_meters);
