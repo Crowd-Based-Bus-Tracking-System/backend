@@ -35,9 +35,9 @@ np.random.seed(SEED)
 
 # ── output ─────────────────────────────────────────────────────────────────────
 SCRIPT_DIR  = os.path.dirname(os.path.abspath(__file__))
-OUTPUT_DIR  = os.path.join(SCRIPT_DIR, "data", "arrivals")
+OUTPUT_DIR  = os.path.join(SCRIPT_DIR, "arrivals")
 OUTPUT_FILE = os.path.join(OUTPUT_DIR, "arrivals.csv")
-NUM_ROWS    = 120_000
+NUM_ROWS    = 75_000
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  STATIC REFERENCE  (mirrors seed.js exactly)
