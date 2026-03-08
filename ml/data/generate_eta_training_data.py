@@ -25,9 +25,9 @@ random.seed(SEED)
 np.random.seed(SEED)
 
 SCRIPT_DIR  = os.path.dirname(os.path.abspath(__file__))
-OUTPUT_DIR  = os.path.join(SCRIPT_DIR, "data", "eta")
+OUTPUT_DIR  = os.path.join(SCRIPT_DIR, "eta")
 OUTPUT_FILE = os.path.join(OUTPUT_DIR, "eta.csv")
-NUM_ROWS    = 150_000
+NUM_ROWS    = 75_000
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  STATIC REFERENCE DATA
