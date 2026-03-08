@@ -42,13 +42,39 @@ export const getActiveOrNextTripForBus = async (busId) => {
         });
     }
 
+    for (const trip of trips) {
+        const crossesMidnight = trip.endSecs < trip.startSecs;
+        if (crossesMidnight) {
+            trip.endSecs += 86400;
+            for (const stop of trip.stops) {
+                const stopSecs = stop.tMs / 1000;
+                if (stopSecs < trip.startSecs) {
+                    stop.tMs += 86400 * 1000;
+                }
+            }
+        }
+    }
+
     let activeTrip = null;
     let nextTrip = null;
 
     for (const trip of trips) {
-        if (currentSeconds >= trip.startSecs && currentSeconds <= trip.endSecs) {
-            activeTrip = trip;
-            break;
+        const crossesMidnight = trip.endSecs > 86400;
+        if (crossesMidnight) {
+            const adjustedCurrent = currentSeconds < trip.startSecs
+                ? currentSeconds + 86400
+                : currentSeconds;
+            if (adjustedCurrent >= trip.startSecs && adjustedCurrent <= trip.endSecs) {
+                activeTrip = trip;
+                activeTrip.normalizedCurrentSeconds = adjustedCurrent;
+                break;
+            }
+        } else {
+            if (currentSeconds >= trip.startSecs && currentSeconds <= trip.endSecs) {
+                activeTrip = trip;
+                activeTrip.normalizedCurrentSeconds = currentSeconds;
+                break;
+            }
         }
         if (trip.startSecs > currentSeconds && !nextTrip) {
             nextTrip = trip;

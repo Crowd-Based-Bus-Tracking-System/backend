@@ -53,11 +53,12 @@ class BaseEtaService {
 
             scheduledETA = waitTimeSecs + tripTransitTime;
         } else {
+            const normalizedCurrent = selectedTrip.normalizedCurrentSeconds || currentSeconds;
             const targetStopSecs = targetStopSchedule.tMs / 1000;
-            if (currentSeconds > targetStopSecs) {
+            if (normalizedCurrent > targetStopSecs) {
                 return { eta_seconds: 0, method: "already_passed" };
             }
-            scheduledETA = targetStopSecs - currentSeconds;
+            scheduledETA = targetStopSecs - normalizedCurrent;
         }
 
         if (!lastConfirmedStop || isWaitingForNext) {
@@ -117,23 +118,23 @@ class BaseEtaService {
         let totalTime = 0;
         let fromStopId = lastConfirmedStop.stopId;
         const segmentTimes = [];
-        
+
         const pipeline = redis.pipeline();
         const cacheKeys = [];
-        
+
         for (const stop of remainingStops) {
             const cacheKey = `segment:${routeId}:${fromStopId}:${stop.id}`;
             cacheKeys.push(cacheKey);
             pipeline.get(cacheKey);
         }
-        
+
         const cachedResults = await pipeline.exec();
-        
+
         const missingSegments = [];
         for (let i = 0; i < remainingStops.length; i++) {
             const cachedTime = cachedResults[i][1];
             const stop = remainingStops[i];
-            
+
             if (cachedTime) {
                 const segmentTime = Number(cachedTime);
                 segmentTimes.push(segmentTime);
@@ -150,29 +151,29 @@ class BaseEtaService {
                 segmentTimes.push(null);
             }
         }
-        
+
         if (missingSegments.length > 0) {
             const fetchPipeline = redis.pipeline();
             const fetchPromises = [];
-            
+
             for (const missing of missingSegments) {
                 fetchPromises.push(
                     getSegmentTime(missing.fromStopId, missing.stop.id, routeId)
                 );
             }
-            
+
             const segmentTimesFetched = await Promise.all(fetchPromises);
-            
+
             for (let i = 0; i < missingSegments.length; i++) {
                 const missing = missingSegments[i];
                 const segmentTime = segmentTimesFetched[i];
-                
+
                 segmentTimes[missing.index] = segmentTime;
                 totalTime += segmentTime;
-                
+
                 fetchPipeline.setex(missing.cacheKey, 3600, segmentTime);
             }
-            
+
             await fetchPipeline.exec();
         }
 
@@ -240,76 +241,76 @@ class BaseEtaService {
         const routeId = bus?.route_id;
 
         const timeSinceLastArrival = (Date.now() - lastConfirmedStop.arrivedAt) / 1000;
-        
+
         let currentSpeed = null;
         let totalDistance = 0;
-        
+
         try {
             const recentStops = await this.busProgressionService.getRecentStops(busId, 4);
-            
+
             if (recentStops && recentStops.length >= 3) {
                 const segmentSpeeds = [];
-                
+
                 for (let i = 0; i < Math.min(3, recentStops.length - 1); i++) {
                     const currentStop = recentStops[i];
                     const previousStop = recentStops[i + 1];
-                    
+
                     if (currentStop.arrivedAt && previousStop.arrivedAt) {
                         const segmentDistance = await getSegmentDistance(
-                            previousStop.stopId, 
-                            currentStop.stopId, 
+                            previousStop.stopId,
+                            currentStop.stopId,
                             routeId
                         );
-                        
+
                         const travelTime = (currentStop.arrivedAt - previousStop.arrivedAt) / 1000;
-                        
+
                         if (segmentDistance && travelTime > 0) {
                             const segmentSpeed = segmentDistance / travelTime;
-                            
+
                             const minSpeed = 0.5;
                             const maxSpeed = 25.0;
-                            
+
                             if (segmentSpeed >= minSpeed && segmentSpeed <= maxSpeed) {
                                 segmentSpeeds.push(segmentSpeed);
                             }
                         }
                     }
                 }
-                
+
                 if (segmentSpeeds.length > 0) {
                     const newSpeed = segmentSpeeds.reduce((sum, speed) => sum + speed, 0) / segmentSpeeds.length;
-                    
+
                     const speedCacheKey = `speed:${busId}`;
                     const previousSpeed = await redis.get(speedCacheKey);
-                    
+
                     if (previousSpeed) {
                         currentSpeed = (0.7 * Number(previousSpeed)) + (0.3 * newSpeed);
                     } else {
                         currentSpeed = newSpeed;
                     }
-                    
+
                     await redis.setex(speedCacheKey, 300, currentSpeed);
-                    
+
                     const minSpeed = 1.0;
                     const maxSpeed = 20.0;
-                    
+
                     if (currentSpeed < minSpeed || currentSpeed > maxSpeed) {
                         currentSpeed = null;
                     }
                 }
             } else {
                 const lastSegmentDistance = await getSegmentDistance(
-                    lastConfirmedStop.previousStopId || lastConfirmedStop.stopId, 
-                    lastConfirmedStop.stopId, 
+                    lastConfirmedStop.previousStopId || lastConfirmedStop.stopId,
+                    lastConfirmedStop.stopId,
                     routeId
                 );
-                
+
                 if (lastSegmentDistance && timeSinceLastArrival > 0) {
                     currentSpeed = lastSegmentDistance / timeSinceLastArrival;
-                    
+
                     const minSpeed = 0.5;
                     const maxSpeed = 15.0;
-                    
+
                     if (currentSpeed < minSpeed || currentSpeed > maxSpeed) {
                         currentSpeed = null;
                     }
@@ -322,26 +323,26 @@ class BaseEtaService {
 
         let fromStopId = lastConfirmedStop.stopId;
         const segmentDistances = [];
-        
+
         const distancePipeline = redis.pipeline();
         const distanceCacheKeys = [];
-        
+
         for (const stop of remainingStops) {
             const distanceCacheKey = `distance:${routeId}:${fromStopId}:${stop.id}`;
             distanceCacheKeys.push(distanceCacheKey);
             distancePipeline.get(distanceCacheKey);
             fromStopId = stop.id;
         }
-        
+
         const cachedDistances = await distancePipeline.exec();
-        
+
         const missingDistances = [];
         fromStopId = lastConfirmedStop.stopId;
-        
+
         for (let i = 0; i < remainingStops.length; i++) {
             const cachedDistance = cachedDistances[i][1];
             const stop = remainingStops[i];
-            
+
             if (cachedDistance) {
                 const parsedDistance = Number(cachedDistance);
                 segmentDistances.push(parsedDistance);
@@ -358,34 +359,34 @@ class BaseEtaService {
                 fromStopId = stop.id;
             }
         }
-        
+
         if (missingDistances.length > 0) {
             const fetchPipeline = redis.pipeline();
             const fetchPromises = [];
-            
+
             for (const missing of missingDistances) {
                 fetchPromises.push(
                     getSegmentDistance(missing.fromStopId, missing.stop.id, routeId)
                 );
             }
-            
+
             const distances = await Promise.all(fetchPromises);
-            
+
             for (let i = 0; i < missingDistances.length; i++) {
                 const missing = missingDistances[i];
                 const distance = distances[i];
-                
+
                 if (distance) {
                     const parsedDistance = Number(distance);
                     segmentDistances[missing.index] = parsedDistance;
                     totalDistance += parsedDistance;
-                    
+
                     fetchPipeline.setex(missing.cacheKey, 86400, distance);
                 } else {
                     segmentDistances[missing.index] = 0;
                 }
             }
-            
+
             await fetchPipeline.exec();
         }
 
@@ -515,12 +516,12 @@ class ETAFusionEngine {
         if (hasSpeed && hasHistorical) {
             const speedWeight = speedBasedETA.confidence;
             const historicalWeight = 1 - speedWeight;
-            
-            const blendedETA = (speedBasedETA.eta_seconds * speedWeight) + 
-                              (historicalETA.eta_seconds * historicalWeight);
-            
+
+            const blendedETA = (speedBasedETA.eta_seconds * speedWeight) +
+                (historicalETA.eta_seconds * historicalWeight);
+
             finalETA = Math.max(0, blendedETA);
-            
+
             methods.push({
                 method: "speed_historical_blend",
                 speed_eta: speedBasedETA.eta_seconds,
@@ -529,15 +530,15 @@ class ETAFusionEngine {
                 historical_weight: historicalWeight,
                 current_speed: speedBasedETA.current_speed,
                 eta: finalETA,
-                confidence: (speedBasedETA.confidence * speedWeight) + 
-                           (historicalETA.confidence * historicalWeight)
+                confidence: (speedBasedETA.confidence * speedWeight) +
+                    (historicalETA.confidence * historicalWeight)
             });
 
             if (hasML) {
                 const mlDelay = mlETA.mlDelay || (mlETA.mlPrediction - baseTravelTime);
                 const mlWeight = mlETA.confidence * 0.4;
                 finalETA = Math.max(0, finalETA * (1 - mlWeight) + (baseTravelTime + mlDelay) * mlWeight);
-                
+
                 methods.push({
                     method: "speed_historical_ml_blend",
                     ml_delay: mlDelay,
@@ -611,20 +612,20 @@ class ETAFusionEngine {
             const segmentTimesFull = [];
             const pipeline = redis.pipeline();
             const cacheKeys = [];
-            
+
             for (const stop of remainingStopsFull) {
                 const cacheKey = `segment:${routeId}:${fromStopId}:${stop.id}`;
                 cacheKeys.push(cacheKey);
                 pipeline.get(cacheKey);
             }
-            
+
             const cachedResults = await pipeline.exec();
-            
+
             const missingSegments = [];
             for (let i = 0; i < remainingStopsFull.length; i++) {
                 const cachedTime = cachedResults[i][1];
                 const stop = remainingStopsFull[i];
-                
+
                 if (cachedTime) {
                     const seg = Number(cachedTime);
                     segmentTimesFull.push(seg);
@@ -641,30 +642,30 @@ class ETAFusionEngine {
                     segmentTimesFull.push(null);
                 }
             }
-            
+
             if (missingSegments.length > 0) {
                 const fetchPipeline = redis.pipeline();
                 const fetchPromises = [];
-                
+
                 for (const missing of missingSegments) {
                     fetchPromises.push(
                         getSegmentTime(missing.fromStopId, missing.stop.id, routeId)
                     );
                 }
-                
+
                 const segmentTimes = await Promise.all(fetchPromises);
-                
+
                 for (let i = 0; i < missingSegments.length; i++) {
                     const missing = missingSegments[i];
                     const segmentTime = segmentTimes[i];
                     const seg = Number(segmentTime);
-                    
+
                     segmentTimesFull[missing.index] = seg;
                     totalTimeFull += seg;
-                    
+
                     fetchPipeline.setex(missing.cacheKey, 3600, segmentTime);
                 }
-                
+
                 await fetchPipeline.exec();
             }
 
@@ -719,13 +720,13 @@ class ETAFusionEngine {
                         } else {
                             stopBaseTime = cumulativeBaseTime - timeSinceInferredPoint;
                         }
-                        
+
                         const delayFactor = baseTravelTime > 0
                             ? Math.max(0, Math.min(1, stopBaseTime / baseTravelTime))
                             : 1;
                         const proportionalDelay = finalDelay * delayFactor;
                         let stopEtaSeconds = Math.max(0, stopBaseTime + proportionalDelay);
-                        
+
                         if (stopBaseTime <= 0) {
                             routeEtas.push({
                                 stop_id: remainingStopsFull[i].id,
@@ -819,7 +820,7 @@ class ETAFusionEngine {
         if (speedBasedETA?.confidence && speedBasedETA.eta_seconds !== null) {
             const speedConfidence = speedBasedETA.confidence;
             weights.speed = speedConfidence * 0.8;
-            
+
             const remainingWeight = 1 - weights.speed;
             weights.historical = remainingWeight * 0.6;
             weights.ml = remainingWeight * 0.3;

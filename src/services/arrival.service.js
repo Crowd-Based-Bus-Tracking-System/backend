@@ -24,7 +24,7 @@ async function getScheduleForStop(busId, stopId) {
 
 const busProgressionService = new BusProgressionService();
 
-const MIN_REPORTS = 3;
+const MIN_REPORTS = 1;
 const MIN_REPORT_INTERVAL = 60 * 1000;
 const ARRIVAL_EXPIRATION = 300;
 const RADIUS_MIN_METERS = 999999999999999999999999;
