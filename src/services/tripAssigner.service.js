@@ -9,7 +9,12 @@ export const assignActiveTrips = async () => {
                 SELECT b.id as bus_id, (
                     SELECT t.id FROM trips t
                     WHERE t.bus_id = b.id 
-                      AND CURRENT_TIME BETWEEN t.start_time AND t.end_time
+                      AND (
+                        CASE 
+                          WHEN t.start_time <= t.end_time THEN CURRENT_TIME BETWEEN t.start_time AND t.end_time
+                          ELSE CURRENT_TIME >= t.start_time OR CURRENT_TIME <= t.end_time
+                        END
+                      )
                     ORDER BY t.start_time DESC
                     LIMIT 1
                 ) as new_trip_id
@@ -32,3 +37,5 @@ export const startTripAssignerCron = () => {
     assignActiveTrips(); // Run initially
     setInterval(assignActiveTrips, 60000); // Run every 60 seconds
 };
+
+startTripAssignerCron();

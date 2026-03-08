@@ -5,6 +5,9 @@ import { validateOccupancyWithML, storeOccupancyForTraining } from "./ml-occupan
 import { storeOccupancy } from "../models/occupancy.js";
 import { getWeatherImpact } from "./weather.service.js";
 import { getIO } from "../socket/index.js";
+import { getBusById } from "../models/bus.js";
+import { getRouteStops } from "../models/route.js";
+import { getActiveOrNextTripForBus } from "../models/shedule.js";
 
 const MIN_REPORTS = 3;
 const MIN_REPORT_INTERVAL = 60 * 1000;
@@ -93,13 +96,50 @@ export const reportOccupancy = async (data) => {
         if (shouldConfirm) {
             await redis.set(confirmedKey, true, "EX", OCCUPANCY_EXPIRATION);
 
+            let journeyExpirationSettings = 7200;
+            try {
+                const trips = await getActiveOrNextTripForBus(busId);
+                const activeTrip = trips?.activeTrip || trips?.nextTrip || trips?.firstTrip;
+
+                if (activeTrip && activeTrip.endSecs !== undefined) {
+                    const now = new Date();
+                    const currentSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+
+                    let remainingSeconds = activeTrip.endSecs - currentSeconds;
+
+                    if (remainingSeconds < -43200) {
+                        remainingSeconds += 86400;
+                    }
+
+                    if (remainingSeconds > 0) {
+                        const dynamicBuffer = Math.max(900, Math.min(7200, Math.floor(remainingSeconds * 0.3)));
+                        journeyExpirationSettings = Math.max(1800, Math.min(43200, remainingSeconds + dynamicBuffer));
+                        console.log(`Dynamic occupancy expiration for Bus ${busId} at Stop ${stopId}: ${journeyExpirationSettings}s (Trip ends in ${remainingSeconds}s, Buffer: ${dynamicBuffer}s)`);
+                    }
+                } else {
+                    const bus = await getBusById(busId);
+                    if (bus && bus.route_id) {
+                        const routeStops = await getRouteStops(busId);
+                        const currentIndex = routeStops.findIndex(s => s.id === stopId);
+
+                        if (currentIndex !== -1) {
+                            const remainingStops = routeStops.length - 1 - currentIndex;
+                            journeyExpirationSettings = Math.max(1800, Math.min(43200, (remainingStops * 15 * 60) + 1800));
+                            console.log(`Fallback dynamic occupancy expiration for Bus ${busId}: ${journeyExpirationSettings}s (${remainingStops} stops remaining)`);
+                        }
+                    }
+                }
+            } catch (err) {
+                console.warn(`Failed to calculate dynamic occupancy expiration for bus ${busId}:`, err.message);
+            }
+
             await redis.hset(`bus:${busId}:current_occupancy`, {
                 level: String(medianLevel),
                 stopId: String(stopId),
                 confirmedAt: String(Date.now()),
                 reportCount: String(reportCount)
             });
-            await redis.expire(`bus:${busId}:current_occupancy`, 86400);
+            await redis.expire(`bus:${busId}:current_occupancy`, journeyExpirationSettings);
 
             io.to(`bus:${busId}`).emit("bus:occupancy", {
                 busId, stopId, occupancyLevel: medianLevel,

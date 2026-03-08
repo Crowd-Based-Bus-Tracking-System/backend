@@ -57,21 +57,47 @@ export const getSimulatedBusStatus = async (busId, routeId) => {
         });
     }
 
+    for (const trip of trips) {
+        const crossesMidnight = trip.endSecs < trip.startSecs;
+        if (crossesMidnight) {
+            trip.endSecs += 86400;
+            for (const stop of trip.stops) {
+                const stopSecs = stop.tMs / 1000;
+                if (stopSecs < trip.startSecs) {
+                    stop.tMs += 86400 * 1000;
+                }
+            }
+        }
+    }
+
     let activeTrip = null;
     let nextTrip = null;
+    let normalizedCurrent = currentSeconds;
 
     for (const trip of trips) {
-        if (currentSeconds >= trip.startSecs && currentSeconds <= trip.endSecs) {
-            activeTrip = trip;
-            break;
+        const crossesMidnight = trip.endSecs > 86400;
+        if (crossesMidnight) {
+            const adjusted = currentSeconds < trip.startSecs
+                ? currentSeconds + 86400
+                : currentSeconds;
+            if (adjusted >= trip.startSecs && adjusted <= trip.endSecs) {
+                activeTrip = trip;
+                normalizedCurrent = adjusted;
+                break;
+            }
+        } else {
+            if (currentSeconds >= trip.startSecs && currentSeconds <= trip.endSecs) {
+                activeTrip = trip;
+                break;
+            }
         }
         if (trip.startSecs > currentSeconds && !nextTrip) {
             nextTrip = trip;
         }
     }
 
-    const selectedTrip = activeTrip || nextTrip || trips[0]; // Active, Next, or wrap to Tomorrow's First
-    const nowMs = currentSeconds * 1000;
+    const selectedTrip = activeTrip || nextTrip || trips[0];
+    const nowMs = normalizedCurrent * 1000;
 
     let segmentProgress = 0;
     let lastStop = selectedTrip.stops[0];
@@ -104,6 +130,8 @@ export const getSimulatedBusStatus = async (busId, routeId) => {
     const lat = parseFloat(lastStop.latitude) + (parseFloat(nextStop.latitude) - parseFloat(lastStop.latitude)) * segmentProgress;
     const lng = parseFloat(lastStop.longitude) + (parseFloat(nextStop.longitude) - parseFloat(lastStop.longitude)) * segmentProgress;
 
+    const lastStopRealTMs = lastStop.tMs >= 86400000 ? lastStop.tMs - 86400000 : lastStop.tMs;
+
     return {
         busId,
         routeId,
@@ -112,7 +140,7 @@ export const getSimulatedBusStatus = async (busId, routeId) => {
         lastConfirmedStop: {
             stopId: parseInt(lastStop.stop_id),
             stopName: lastStop.stop_name || "Unknown",
-            arrivedAt: todayMidnight.getTime() + lastStop.tMs,
+            arrivedAt: todayMidnight.getTime() + lastStopRealTMs,
             timeSinceArrival: activeTrip ? Math.round((nowMs - lastStop.tMs) / 1000) : 0
         },
         estimatedPosition: {
@@ -181,6 +209,19 @@ export const getBusStatus = async (busId, routeId) => {
     }
 
     const segmentProgress = expectedSegmentTime > 0 ? Math.min(1, timeSinceLastArrival / expectedSegmentTime) : 1;
+
+    if (segmentProgress >= 1 && timeSinceLastArrival > expectedSegmentTime + 180000) {
+        const simulated = await getSimulatedBusStatus(busId, routeId);
+        if (simulated && simulated.status !== "UNKNOWN") {
+            simulated.lastConfirmedStop = {
+                stopId: parseInt(lastStopId),
+                stopName: lastStop?.name || "Unknown",
+                arrivedAt: lastArrivalTimeMs,
+                timeSinceArrival: Math.round(timeSinceLastArrival / 1000)
+            };
+            return simulated;
+        }
+    }
 
     const lat = parseFloat(lastStop.latitude) + (parseFloat(nextStop.latitude) - parseFloat(lastStop.latitude)) * segmentProgress;
     const lng = parseFloat(lastStop.longitude) + (parseFloat(nextStop.longitude) - parseFloat(lastStop.longitude)) * segmentProgress;

@@ -1,14 +1,24 @@
 import redis from "../config/redis.js";
 import { getBusById } from "../models/bus.js";
 import { getRouteStops } from "../models/route.js";
-
-
 class BusProgressionService {
     async getLastConfirmedStop(busId) {
         const lastStopId = await redis.get(`bus:${busId}:last_stop`);
         const lastArrivalTime = await redis.get(`bus:${busId}:last_arrival_time`);
 
         if (!lastStopId || !lastArrivalTime) {
+            const bus = await getBusById(busId);
+            if (!bus || !bus.route_id) return null;
+
+            const { getSimulatedBusStatus } = await import("../socket/emitters/bus-updates.js");
+            const simulatedStatus = await getSimulatedBusStatus(busId, bus.route_id);
+            if (simulatedStatus && simulatedStatus.status !== "AT_TERMINUS" && simulatedStatus.lastConfirmedStop) {
+                return {
+                    stopId: simulatedStatus.lastConfirmedStop.stopId,
+                    arrivedAt: simulatedStatus.lastConfirmedStop.arrivedAt,
+                    minutesSinceArrival: simulatedStatus.lastConfirmedStop.timeSinceArrival / 60
+                };
+            }
             return null;
         }
 
