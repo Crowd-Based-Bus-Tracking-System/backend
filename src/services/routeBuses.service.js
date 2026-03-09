@@ -6,6 +6,87 @@ import distanceInMeters from "../utils/geo.js";
 import { getCurrentOccupancy } from "./occupancy.service.js";
 import redis from "../config/redis.js";
 
+
+async function deriveScheduledPosition(routeEtas, allRouteStops) {
+    if (!routeEtas || routeEtas.length === 0) return null;
+
+    let lastPassedEntry = null;
+    let nextUpcomingEntry = null;
+
+    for (const entry of routeEtas) {
+        if (entry.is_passed) {
+            lastPassedEntry = entry;
+        } else {
+            nextUpcomingEntry = entry;
+            break;
+        }
+    }
+
+    if (!lastPassedEntry && nextUpcomingEntry) {
+        const firstStop = allRouteStops.find(s => s.id === nextUpcomingEntry.stop_id);
+        if (firstStop) {
+            return {
+                lat: parseFloat(firstStop.latitude),
+                lng: parseFloat(firstStop.longitude),
+                fromStopId: null,
+                toStopId: nextUpcomingEntry.stop_id
+            };
+        }
+        return null;
+    }
+
+    if (lastPassedEntry && !nextUpcomingEntry) {
+        const lastStop = allRouteStops.find(s => s.id === lastPassedEntry.stop_id);
+        if (lastStop) {
+            return {
+                lat: parseFloat(lastStop.latitude),
+                lng: parseFloat(lastStop.longitude),
+                fromStopId: lastPassedEntry.stop_id,
+                toStopId: null
+            };
+        }
+        return null;
+    }
+
+    const [fromStop, toStop] = await Promise.all([
+        getStopById(lastPassedEntry.stop_id),
+        getStopById(nextUpcomingEntry.stop_id)
+    ]);
+
+    if (!fromStop || !toStop) return null;
+
+    const segmentDist = distanceInMeters(
+        parseFloat(fromStop.latitude), parseFloat(fromStop.longitude),
+        parseFloat(toStop.latitude), parseFloat(toStop.longitude)
+    );
+
+    const fromIdx = routeEtas.findIndex(e => e.stop_id === lastPassedEntry.stop_id);
+    const prevEntry = fromIdx > 0 ? routeEtas[fromIdx - 1] : null;
+    const nextEta = nextUpcomingEntry.eta_seconds ?? 0;
+
+    const toIdx = routeEtas.findIndex(e => e.stop_id === nextUpcomingEntry.stop_id);
+    const afterEntry = toIdx >= 0 && toIdx + 1 < routeEtas.length ? routeEtas[toIdx + 1] : null;
+
+    const adjacentSegmentSecs = afterEntry && afterEntry.eta_seconds > nextEta
+        ? (afterEntry.eta_seconds - nextEta)
+        : null;
+    const segmentTotalSecs = adjacentSegmentSecs ?? Math.max(60, segmentDist / 8);
+
+    const elapsed = Math.max(0, segmentTotalSecs - nextEta);
+    const progress = segmentTotalSecs > 0 ? Math.min(1, elapsed / segmentTotalSecs) : 0.5;
+
+    const lat = parseFloat(fromStop.latitude) + (parseFloat(toStop.latitude) - parseFloat(fromStop.latitude)) * progress;
+    const lng = parseFloat(fromStop.longitude) + (parseFloat(toStop.longitude) - parseFloat(fromStop.longitude)) * progress;
+
+    return {
+        lat,
+        lng,
+        fromStopId: lastPassedEntry.stop_id,
+        toStopId: nextUpcomingEntry.stop_id,
+        progress
+    };
+}
+
 const etaFusionEngine = new ETAFusionEngine();
 
 export const getRouteBusesSortedByETA = async (routeId, targetStopId, location) => {
@@ -26,26 +107,26 @@ export const getRouteBusesSortedByETA = async (routeId, targetStopId, location) 
                     if (status.lastConfirmedStop) {
                         const cachedRouteEtaKey = `route_eta:${bus.id}`;
                         const cachedRouteEta = await redis.get(cachedRouteEtaKey);
-                        
+
                         if (cachedRouteEta) {
                             try {
                                 const parsedEta = JSON.parse(cachedRouteEta);
                                 const stopEta = parsedEta.find(s => s.stop_id === targetStopId);
-                                
+
                                 if (stopEta) {
                                     const freshEtaResult = await etaFusionEngine.calculateFinalEta({
                                         bus: { busId: bus.id, routeId },
                                         targetStopId,
                                         location
                                     });
-                                    
+
                                     const cachedMinutes = stopEta.eta_minutes;
                                     const freshMinutes = freshEtaResult.eta_minutes;
-                                    
+
                                     if (Math.abs(cachedMinutes - freshMinutes) > 5) {
                                         console.warn(`Stale cache detected for bus ${bus.id}: cached=${cachedMinutes}m, fresh=${freshMinutes}m`);
                                         await redis.del(cachedRouteEtaKey);
-                                        
+
                                         etaResult = freshEtaResult;
                                     } else {
                                         etaResult = {
@@ -122,8 +203,37 @@ export const getRouteBusesSortedByETA = async (routeId, targetStopId, location) 
                     }
                 }
 
-                const nextStopObj = status.estimatedPosition?.toStopId
-                    ? await getStopById(status.estimatedPosition.toStopId)
+                const isScheduledMethod = ['schedule_active', 'waiting_for_trip'].includes(
+                    etaResult.methods_used?.[0]?.method
+                );
+
+                let resolvedEstimatedPosition = status.estimatedPosition || null;
+
+                if (isScheduledMethod && etaResult.route_etas?.length > 0) {
+                    try {
+                        const stopIds = etaResult.route_etas.map(e => e.stop_id);
+                        const stopObjs = await Promise.all(stopIds.map(id => getStopById(id).catch(() => null)));
+                        const allRouteStopsForPos = stopObjs
+                            .filter(Boolean)
+                            .map(s => ({ id: s.id, latitude: s.latitude, longitude: s.longitude }));
+
+                        const scheduledPos = await deriveScheduledPosition(etaResult.route_etas, allRouteStopsForPos);
+                        if (scheduledPos) {
+                            resolvedEstimatedPosition = {
+                                lat: scheduledPos.lat,
+                                lng: scheduledPos.lng,
+                                fromStopId: scheduledPos.fromStopId,
+                                toStopId: scheduledPos.toStopId,
+                                isScheduled: true
+                            };
+                        }
+                    } catch (e) {
+                        console.warn(`Scheduled position derivation failed for bus ${bus.id}:`, e.message);
+                    }
+                }
+
+                const nextStopObj = resolvedEstimatedPosition?.toStopId
+                    ? await getStopById(resolvedEstimatedPosition.toStopId)
                     : null;
 
                 let calculatedSpeed = 0;
@@ -158,7 +268,7 @@ export const getRouteBusesSortedByETA = async (routeId, targetStopId, location) 
                     occupancyLevel: occupancyData?.level || 1,
                     next_stop_name: nextStopObj?.name || "Unknown",
                     lastConfirmedStop: status.lastConfirmedStop || null,
-                    estimatedPosition: status.estimatedPosition || null,
+                    estimatedPosition: resolvedEstimatedPosition,
                     eta: {
                         eta_seconds: etaResult.eta_seconds,
                         eta_minutes: etaResult.eta_minutes,
@@ -185,7 +295,13 @@ export const getRouteBusesSortedByETA = async (routeId, targetStopId, location) 
     );
 
     const resolvedBuses = busETAs
-        .filter(r => r.status === "fulfilled" && !r.value.eta.is_passed)
+        .filter(r => {
+            if (r.status !== "fulfilled") return false;
+            if (targetStopId && r.value.eta.is_passed) {
+                return false;
+            }
+            return true;
+        })
         .map(r => r.value)
         .sort((a, b) => a.eta.eta_seconds - b.eta.eta_seconds);
 

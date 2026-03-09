@@ -3,455 +3,176 @@ import BusProgressionService from "./busProgression.service.js";
 import { getActiveOrNextTripForBus } from "../models/shedule.js";
 import { predictETAWithML } from "./ml-eta-prediction/mlEtaIntegration.service.js";
 import { getBusById } from "../models/bus.js";
-import { getScheduledTime, getNextScheduledTime, getSegmentTime, calculateConfidence, getSegmentDistance } from "../utils/eta-helpers.js";
+import { getRouteStops } from "../models/route.js";
+import { getSegmentTime, calculateConfidence, getSegmentDistance } from "../utils/eta-helpers.js";
 import { emitBusETA } from "../socket/emitters/bus-updates.js";
+
 
 class BaseEtaService {
     constructor() {
         this.busProgressionService = new BusProgressionService();
     }
 
-    async calculateScheduleBasedETA(busId, targetStopId) {
-        const lastConfirmedStop = await this.busProgressionService.getLastConfirmedStop(busId);
-        const tripData = await getActiveOrNextTripForBus(busId);
-
-        if (!tripData) {
-            return { eta_seconds: null, method: "no_schedule" };
-        }
-
-        const { activeTrip, nextTrip, firstTrip } = tripData;
-
-        const now = new Date();
-        const currentSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-
-        let selectedTrip = null;
-        let isWaitingForNext = false;
-
-        if (activeTrip) {
-            selectedTrip = activeTrip;
-        } else if (nextTrip) {
-            selectedTrip = nextTrip;
-            isWaitingForNext = true;
-        } else {
-            selectedTrip = firstTrip;
-            isWaitingForNext = true;
-        }
-
-        const targetStopSchedule = selectedTrip.stops.find(s => s.stop_id == targetStopId);
-        if (!targetStopSchedule) {
-            return { eta_seconds: null, method: "stop_not_in_trip" };
-        }
-
-        let scheduledETA = 0;
-
-        if (isWaitingForNext) {
-            let waitTimeSecs = selectedTrip.startSecs - currentSeconds;
-            if (waitTimeSecs < 0) waitTimeSecs += 86400;
-
-            const firstStop = selectedTrip.stops[0];
-            const tripTransitTime = (targetStopSchedule.tMs - firstStop.tMs) / 1000;
-
-            scheduledETA = waitTimeSecs + tripTransitTime;
-        } else {
-            const normalizedCurrent = selectedTrip.normalizedCurrentSeconds || currentSeconds;
-            const targetStopSecs = targetStopSchedule.tMs / 1000;
-            if (normalizedCurrent > targetStopSecs) {
-                return { eta_seconds: 0, method: "already_passed" };
-            }
-            scheduledETA = targetStopSecs - normalizedCurrent;
-        }
-
-        if (!lastConfirmedStop || isWaitingForNext) {
-            return {
-                eta_seconds: Math.max(0, scheduledETA),
-                method: "schedule_only",
-                is_waiting: isWaitingForNext,
-                confidence: 0.2
-            };
-        }
-
-        const lastStopSchedule = selectedTrip.stops.find(s => s.stop_id == lastConfirmedStop.stopId);
-        if (!lastStopSchedule) {
-            return {
-                eta_seconds: Math.max(0, scheduledETA),
-                method: "schedule_only",
-                confidence: 0.2
-            };
-        }
-
-        const scheduledAtLastStop = new Date();
-        const [h, m, s] = lastStopSchedule.sheduled_arrival_time.split(':').map(Number);
-        scheduledAtLastStop.setHours(h, m, s || 0, 0);
-
-        const currentDelay = lastConfirmedStop.arrivedAt - scheduledAtLastStop.getTime();
-
-        const eta_seconds = Math.max(0, scheduledETA + (currentDelay / 1000));
-
-        return {
-            eta_seconds,
-            method: "schedule_with_delay",
-            is_waiting: false,
-            current_delay_seconds: currentDelay / 1000,
-            confidence: 0.4
-        }
-    }
-
-    async calculateHistoricalETA(busId, targetStopId) {
-        const lastConfirmedStop = await this.busProgressionService.getLastConfirmedStop(busId);
-
-        if (!lastConfirmedStop) {
-            return { eta_seconds: null, method: "no_tracking_data" };
-        }
-
-        const remainingStops = await this.busProgressionService.getRemainingStops(
-            busId,
-            targetStopId
-        );
-
-        if (remainingStops.length === 0) {
-            return { eta_seconds: 0, method: "already_passed" };
-        }
-
-        const bus = await getBusById(busId);
-        const routeId = bus?.route_id;
-
-        let totalTime = 0;
-        let fromStopId = lastConfirmedStop.stopId;
-        const segmentTimes = [];
+    async fetchSegmentTimes(routeId, fromStopId, stops) {
+        if (!stops.length) return [];
 
         const pipeline = redis.pipeline();
-        const cacheKeys = [];
+        const keyMeta = [];
+        let from = fromStopId;
 
-        for (const stop of remainingStops) {
-            const cacheKey = `segment:${routeId}:${fromStopId}:${stop.id}`;
-            cacheKeys.push(cacheKey);
-            pipeline.get(cacheKey);
+        for (const stop of stops) {
+            const key = `segment:${routeId}:${from}:${stop.id}`;
+            keyMeta.push({ key, from, to: stop.id });
+            pipeline.get(key);
+            from = stop.id;
         }
 
-        const cachedResults = await pipeline.exec();
+        const results = await pipeline.exec();
+        const times = [];
+        const missing = [];
 
-        const missingSegments = [];
-        for (let i = 0; i < remainingStops.length; i++) {
-            const cachedTime = cachedResults[i][1];
-            const stop = remainingStops[i];
-
-            if (cachedTime) {
-                const segmentTime = Number(cachedTime);
-                segmentTimes.push(segmentTime);
-                totalTime += segmentTime;
-                fromStopId = stop.id;
+        for (let i = 0; i < stops.length; i++) {
+            const cached = results[i][1];
+            if (cached !== null && cached !== undefined) {
+                times.push(Number(cached));
             } else {
-                const currentFromStop = fromStopId;
-                missingSegments.push({
-                    index: i,
-                    stop: stop,
-                    fromStopId: currentFromStop,
-                    cacheKey: cacheKeys[i]
-                });
-                segmentTimes.push(null);
+                missing.push({ index: i, ...keyMeta[i] });
+                times.push(null);
             }
         }
 
-        if (missingSegments.length > 0) {
-            const fetchPipeline = redis.pipeline();
-            const fetchPromises = [];
-
-            for (const missing of missingSegments) {
-                fetchPromises.push(
-                    getSegmentTime(missing.fromStopId, missing.stop.id, routeId)
-                );
+        if (missing.length > 0) {
+            const fetched = await Promise.all(
+                missing.map(m => getSegmentTime(m.from, m.to, routeId))
+            );
+            const cachePipeline = redis.pipeline();
+            for (let i = 0; i < missing.length; i++) {
+                const t = Number(fetched[i]) || 0;
+                times[missing[i].index] = t;
+                if (t > 0) cachePipeline.setex(missing[i].key, 3600, t);
             }
-
-            const segmentTimesFetched = await Promise.all(fetchPromises);
-
-            for (let i = 0; i < missingSegments.length; i++) {
-                const missing = missingSegments[i];
-                const segmentTime = segmentTimesFetched[i];
-
-                segmentTimes[missing.index] = segmentTime;
-                totalTime += segmentTime;
-
-                fetchPipeline.setex(missing.cacheKey, 3600, segmentTime);
-            }
-
-            await fetchPipeline.exec();
+            await cachePipeline.exec();
         }
 
-        const timeSinceLastArrival = (Date.now() - lastConfirmedStop.arrivedAt) / 1000;
-
-        let cumulativeTime = 0;
-        let inferredPassedCount = 0;
-
-        for (let i = 0; i < remainingStops.length; i++) {
-            cumulativeTime += segmentTimes[i];
-            if (timeSinceLastArrival > cumulativeTime * 1.8) {
-                inferredPassedCount++;
-            } else {
-                break;
-            }
-        }
-
-        if (inferredPassedCount >= remainingStops.length) {
-            return { eta_seconds: 0, method: "already_passed" };
-        }
-
-        let adjustedTotalTime = 0;
-        for (let i = inferredPassedCount; i < segmentTimes.length; i++) {
-            adjustedTotalTime += segmentTimes[i];
-        }
-
-        let timeConsumedToInferredPoint = 0;
-        for (let i = 0; i < inferredPassedCount; i++) {
-            timeConsumedToInferredPoint += segmentTimes[i];
-        }
-        const timeSinceInferredPoint = timeSinceLastArrival - timeConsumedToInferredPoint;
-        const eta_seconds = Math.max(0, adjustedTotalTime - timeSinceInferredPoint);
-
-        return {
-            eta_seconds,
-            method: inferredPassedCount > 0 ? "historical_inferred" : "historical_segments",
-            segment_count: remainingStops.length - inferredPassedCount,
-            inferred_passed: inferredPassedCount,
-            time_since_last_arrival: timeSinceLastArrival,
-            confidence: calculateConfidence(lastConfirmedStop.minutesSinceArrival),
-            segment_times: segmentTimes,
-            base_travel_time: adjustedTotalTime,
-            last_stop_id: lastConfirmedStop.stopId,
-            remaining_stops_ids: remainingStops.map(s => s.id)
-        };
+        return times.map(t => t ?? 0);
     }
 
-    async calculateSpeedBasedETA(busId, targetStopId) {
-        const lastConfirmedStop = await this.busProgressionService.getLastConfirmedStop(busId);
+    async fetchSegmentDistances(routeId, fromStopId, stops) {
+        if (!stops.length) return [];
 
-        if (!lastConfirmedStop) {
-            return { eta_seconds: null, method: "no_tracking_data" };
+        const pipeline = redis.pipeline();
+        const keyMeta = [];
+        let from = fromStopId;
+
+        for (const stop of stops) {
+            const key = `distance:${routeId}:${from}:${stop.id}`;
+            keyMeta.push({ key, from, to: stop.id });
+            pipeline.get(key);
+            from = stop.id;
         }
 
-        const remainingStops = await this.busProgressionService.getRemainingStops(
-            busId,
-            targetStopId
-        );
+        const results = await pipeline.exec();
+        const distances = [];
+        const missing = [];
 
-        if (remainingStops.length === 0) {
-            return { eta_seconds: 0, method: "already_passed" };
+        for (let i = 0; i < stops.length; i++) {
+            const cached = results[i][1];
+            if (cached !== null && cached !== undefined) {
+                distances.push(Number(cached));
+            } else {
+                missing.push({ index: i, ...keyMeta[i] });
+                distances.push(null);
+            }
         }
 
-        const bus = await getBusById(busId);
-        const routeId = bus?.route_id;
+        if (missing.length > 0) {
+            const fetched = await Promise.all(
+                missing.map(m => getSegmentDistance(m.from, m.to, routeId))
+            );
+            const cachePipeline = redis.pipeline();
+            for (let i = 0; i < missing.length; i++) {
+                const d = Number(fetched[i]) || 0;
+                distances[missing[i].index] = d;
+                if (d > 0) cachePipeline.setex(missing[i].key, 86400, d);
+            }
+            await cachePipeline.exec();
+        }
 
-        const timeSinceLastArrival = (Date.now() - lastConfirmedStop.arrivedAt) / 1000;
+        return distances.map(d => d ?? 0);
+    }
 
-        let currentSpeed = null;
-        let totalDistance = 0;
-
+    async deriveCurrentSpeed(busId, routeId, lastConfirmedStop) {
         try {
             const recentStops = await this.busProgressionService.getRecentStops(busId, 4);
+            const timeSinceLastArrival = (Date.now() - lastConfirmedStop.arrivedAt) / 1000;
 
             if (recentStops && recentStops.length >= 3) {
                 const segmentSpeeds = [];
-
                 for (let i = 0; i < Math.min(3, recentStops.length - 1); i++) {
-                    const currentStop = recentStops[i];
-                    const previousStop = recentStops[i + 1];
-
-                    if (currentStop.arrivedAt && previousStop.arrivedAt) {
-                        const segmentDistance = await getSegmentDistance(
-                            previousStop.stopId,
-                            currentStop.stopId,
-                            routeId
-                        );
-
-                        const travelTime = (currentStop.arrivedAt - previousStop.arrivedAt) / 1000;
-
-                        if (segmentDistance && travelTime > 0) {
-                            const segmentSpeed = segmentDistance / travelTime;
-
-                            const minSpeed = 0.5;
-                            const maxSpeed = 25.0;
-
-                            if (segmentSpeed >= minSpeed && segmentSpeed <= maxSpeed) {
-                                segmentSpeeds.push(segmentSpeed);
-                            }
-                        }
+                    const curr = recentStops[i];
+                    const prev = recentStops[i + 1];
+                    if (!curr.arrivedAt || !prev.arrivedAt) continue;
+                    const dist = await getSegmentDistance(prev.stopId, curr.stopId, routeId);
+                    const travelTime = (curr.arrivedAt - prev.arrivedAt) / 1000;
+                    if (dist && travelTime > 0) {
+                        const spd = dist / travelTime;
+                        if (spd >= 0.5 && spd <= 25.0) segmentSpeeds.push(spd);
                     }
                 }
 
                 if (segmentSpeeds.length > 0) {
-                    const newSpeed = segmentSpeeds.reduce((sum, speed) => sum + speed, 0) / segmentSpeeds.length;
-
-                    const speedCacheKey = `speed:${busId}`;
-                    const previousSpeed = await redis.get(speedCacheKey);
-
-                    if (previousSpeed) {
-                        currentSpeed = (0.7 * Number(previousSpeed)) + (0.3 * newSpeed);
-                    } else {
-                        currentSpeed = newSpeed;
-                    }
-
-                    await redis.setex(speedCacheKey, 300, currentSpeed);
-
-                    const minSpeed = 1.0;
-                    const maxSpeed = 20.0;
-
-                    if (currentSpeed < minSpeed || currentSpeed > maxSpeed) {
-                        currentSpeed = null;
-                    }
+                    const newSpeed = segmentSpeeds.reduce((a, b) => a + b, 0) / segmentSpeeds.length;
+                    const speedKey = `speed:${busId}`;
+                    const prev = await redis.get(speedKey);
+                    const blended = prev ? 0.7 * Number(prev) + 0.3 * newSpeed : newSpeed;
+                    await redis.setex(speedKey, 300, blended);
+                    if (blended >= 1.0 && blended <= 20.0) return blended;
                 }
             } else {
-                const lastSegmentDistance = await getSegmentDistance(
-                    lastConfirmedStop.previousStopId || lastConfirmedStop.stopId,
+                const dist = await getSegmentDistance(
+                    lastConfirmedStop.previousStopId ?? lastConfirmedStop.stopId,
                     lastConfirmedStop.stopId,
                     routeId
                 );
-
-                if (lastSegmentDistance && timeSinceLastArrival > 0) {
-                    currentSpeed = lastSegmentDistance / timeSinceLastArrival;
-
-                    const minSpeed = 0.5;
-                    const maxSpeed = 15.0;
-
-                    if (currentSpeed < minSpeed || currentSpeed > maxSpeed) {
-                        currentSpeed = null;
-                    }
+                if (dist && timeSinceLastArrival > 0) {
+                    const spd = dist / timeSinceLastArrival;
+                    if (spd >= 0.5 && spd <= 15.0) return spd;
                 }
             }
-        } catch (error) {
-            console.warn("Speed calculation failed:", error.message);
-            currentSpeed = null;
+        } catch (e) {
+            console.warn("Speed derivation failed:", e.message);
         }
-
-        let fromStopId = lastConfirmedStop.stopId;
-        const segmentDistances = [];
-
-        const distancePipeline = redis.pipeline();
-        const distanceCacheKeys = [];
-
-        for (const stop of remainingStops) {
-            const distanceCacheKey = `distance:${routeId}:${fromStopId}:${stop.id}`;
-            distanceCacheKeys.push(distanceCacheKey);
-            distancePipeline.get(distanceCacheKey);
-            fromStopId = stop.id;
-        }
-
-        const cachedDistances = await distancePipeline.exec();
-
-        const missingDistances = [];
-        fromStopId = lastConfirmedStop.stopId;
-
-        for (let i = 0; i < remainingStops.length; i++) {
-            const cachedDistance = cachedDistances[i][1];
-            const stop = remainingStops[i];
-
-            if (cachedDistance) {
-                const parsedDistance = Number(cachedDistance);
-                segmentDistances.push(parsedDistance);
-                totalDistance += parsedDistance;
-                fromStopId = stop.id;
-            } else {
-                missingDistances.push({
-                    index: i,
-                    stop: stop,
-                    fromStopId: fromStopId,
-                    cacheKey: distanceCacheKeys[i]
-                });
-                segmentDistances.push(null);
-                fromStopId = stop.id;
-            }
-        }
-
-        if (missingDistances.length > 0) {
-            const fetchPipeline = redis.pipeline();
-            const fetchPromises = [];
-
-            for (const missing of missingDistances) {
-                fetchPromises.push(
-                    getSegmentDistance(missing.fromStopId, missing.stop.id, routeId)
-                );
-            }
-
-            const distances = await Promise.all(fetchPromises);
-
-            for (let i = 0; i < missingDistances.length; i++) {
-                const missing = missingDistances[i];
-                const distance = distances[i];
-
-                if (distance) {
-                    const parsedDistance = Number(distance);
-                    segmentDistances[missing.index] = parsedDistance;
-                    totalDistance += parsedDistance;
-
-                    fetchPipeline.setex(missing.cacheKey, 86400, distance);
-                } else {
-                    segmentDistances[missing.index] = 0;
-                }
-            }
-
-            await fetchPipeline.exec();
-        }
-
-        if (!currentSpeed || totalDistance === 0) {
-            return { eta_seconds: null, method: "insufficient_speed_data" };
-        }
-
-        const adjustedDistance = totalDistance * 0.85;
-        const speedBasedETA = adjustedDistance / currentSpeed;
-
-        return {
-            eta_seconds: speedBasedETA,
-            method: "speed_based",
-            current_speed: currentSpeed,
-            total_distance: totalDistance,
-            time_since_last_stop: timeSinceLastArrival,
-            confidence: this.calculateSpeedConfidence(currentSpeed, timeSinceLastArrival),
-            segment_distances: segmentDistances
-        };
+        return null;
     }
 
     calculateSpeedConfidence(speed, timeSinceLastArrival) {
-        let confidence = 0.5;
-
-        if (speed >= 3 && speed <= 15) {
-            confidence += 0.2;
-        }
-
-        if (timeSinceLastArrival < 300) {
-            confidence += 0.2;
-        } else if (timeSinceLastArrival < 600) {
-            confidence += 0.1;
-        }
-
-        if (timeSinceLastArrival < 30) {
-            confidence -= 0.1;
-        }
-
-        return Math.max(0.1, Math.min(0.9, confidence));
+        let c = 0.5;
+        if (speed >= 3 && speed <= 15) c += 0.2;
+        if (timeSinceLastArrival < 300) c += 0.2;
+        else if (timeSinceLastArrival < 600) c += 0.1;
+        if (timeSinceLastArrival < 30) c -= 0.1;
+        return Math.max(0.1, Math.min(0.9, c));
     }
 
-    async logHistoricalETATrainingData(busId, targetStopId, historicalETA) {
+    async logTrainingData(busId, targetStopId, finalETA, baseTravelTime, inferredPassed, timeSinceLastArrival, segmentTimes) {
         try {
-            if (!historicalETA || historicalETA.eta_seconds === null || historicalETA.eta_seconds === 0) {
-                return;
-            }
-
-            const trainingData = {
-                bus_id: busId,
-                target_stop_id: targetStopId,
-                last_stop: historicalETA.last_stop_id,
-                inferred_passed: historicalETA.inferred_passed,
-                time_since_last_stop: historicalETA.time_since_last_arrival,
-                segment_times: JSON.stringify(historicalETA.segment_times || []),
-                base_travel_time: historicalETA.base_travel_time,
-                final_eta: historicalETA.eta_seconds,
-                logged_at: Date.now()
-            };
-
-            const key = `eta_training:${busId}:${targetStopId}`;
-            await redis.set(key, JSON.stringify(trainingData), "EX", 7200);
-
-            console.log(`Historical ETA training data logged for bus ${busId} -> stop ${targetStopId} (base=${Math.round(historicalETA.base_travel_time)}s, inferred_passed=${historicalETA.inferred_passed})`);
-        } catch (error) {
-            console.warn("Failed to log historical ETA training data:", error.message);
+            if (!finalETA) return;
+            await redis.set(
+                `eta_training:${busId}:${targetStopId}`,
+                JSON.stringify({
+                    bus_id: busId,
+                    target_stop_id: targetStopId,
+                    inferred_passed: inferredPassed,
+                    time_since_last_stop: timeSinceLastArrival,
+                    segment_times: JSON.stringify(segmentTimes || []),
+                    base_travel_time: baseTravelTime,
+                    final_eta: finalETA,
+                    logged_at: Date.now()
+                }),
+                "EX", 7200
+            );
+        } catch (e) {
+            console.warn("Failed to log ETA training data:", e.message);
         }
     }
 }
@@ -461,304 +182,41 @@ export default BaseEtaService;
 
 class ETAFusionEngine {
     constructor() {
-        this.baseEtaService = new BaseEtaService();
-        this.busProgressionService = new BusProgressionService();
+        this.base = new BaseEtaService();
     }
 
+
     async calculateFinalEta(data) {
-        const { bus: { busId, routeId }, targetStopId, location } = data;
+        const { bus: { busId, routeId }, targetStopId } = data;
 
-        const lastConfirmedStop = await this.baseEtaService.busProgressionService.getLastConfirmedStop(busId);
+        const [lastConfirmedStop, tripData] = await Promise.all([
+            this.base.busProgressionService.getLastConfirmedStop(busId),
+            getActiveOrNextTripForBus(busId)
+        ]);
 
-        const historicalETA = await this.baseEtaService.calculateHistoricalETA(
-            busId,
-            targetStopId
-        );
-
-        if (historicalETA.method === "already_passed") {
-            return {
-                eta_seconds: 0,
-                eta_minutes: 0,
-                arrival_time: null,
-                confidence: 1,
-                freshness_minutes: lastConfirmedStop?.minutesSinceArrival || null,
-                last_confirmed_stop: lastConfirmedStop?.stopId || null,
-                methods_used: [],
-                weights: {},
-                uncertainty_range: {},
-                is_passed: true
-            };
+        const allRouteStops = await getRouteStops(busId);
+        if (!allRouteStops?.length) {
+            return this._emptyResult(lastConfirmedStop);
         }
 
-        await this.baseEtaService.logHistoricalETATrainingData(busId, targetStopId, historicalETA);
+        const tripResult = await this._computeTripETAs({
+            busId, routeId, lastConfirmedStop, allRouteStops, tripData, targetStopId, data
+        });
 
-        const scheduleBasedETA = await this.baseEtaService.calculateScheduleBasedETA(
-            busId,
-            targetStopId
-        );
+        const { routeEtas, finalETA, method, confidence, weights, isTargetPassed } = tripResult;
 
-        const speedBasedETA = await this.baseEtaService.calculateSpeedBasedETA(
-            busId,
-            targetStopId
-        );
-
-        const mlETA = await predictETAWithML(data);
-
-        const baseTravelTime = historicalETA.base_travel_time || historicalETA.eta_seconds || 0;
-        let finalETA = 0;
-        const methods = [];
-
-        const hasML = mlETA.mlPrediction !== null && mlETA.mlPrediction !== undefined && mlETA.confidence !== undefined;
-        const hasHistorical = historicalETA.eta_seconds !== null;
-        const hasSchedule = scheduleBasedETA.eta_seconds !== null;
-        const hasSpeed = speedBasedETA?.eta_seconds !== null;
-
-        if (hasSpeed && hasHistorical) {
-            const speedWeight = speedBasedETA.confidence;
-            const historicalWeight = 1 - speedWeight;
-
-            const blendedETA = (speedBasedETA.eta_seconds * speedWeight) +
-                (historicalETA.eta_seconds * historicalWeight);
-
-            finalETA = Math.max(0, blendedETA);
-
-            methods.push({
-                method: "speed_historical_blend",
-                speed_eta: speedBasedETA.eta_seconds,
-                historical_eta: historicalETA.eta_seconds,
-                speed_weight: speedWeight,
-                historical_weight: historicalWeight,
-                current_speed: speedBasedETA.current_speed,
-                eta: finalETA,
-                confidence: (speedBasedETA.confidence * speedWeight) +
-                    (historicalETA.confidence * historicalWeight)
-            });
-
-            if (hasML) {
-                const mlDelay = mlETA.mlDelay || (mlETA.mlPrediction - baseTravelTime);
-                const mlWeight = mlETA.confidence * 0.4;
-                finalETA = Math.max(0, finalETA * (1 - mlWeight) + (baseTravelTime + mlDelay) * mlWeight);
-
-                methods.push({
-                    method: "speed_historical_ml_blend",
-                    ml_delay: mlDelay,
-                    ml_weight: mlWeight,
-                    eta: finalETA,
-                    ml_confidence: mlETA.confidence
-                });
-            }
-        } else if (hasML && hasHistorical) {
-            const mlDelay = mlETA.mlDelay || (mlETA.mlPrediction - baseTravelTime);
-            finalETA = Math.max(0, baseTravelTime + mlDelay);
-
-            methods.push({
-                method: "baseline_plus_ml_delay",
-                base_travel_time: baseTravelTime,
-                ml_delay: mlDelay,
-                eta: finalETA,
-                ml_confidence: mlETA.confidence
-            });
-
-            if (hasSchedule && scheduleBasedETA.eta_seconds > 0) {
-                const scheduleCap = scheduleBasedETA.eta_seconds * 2;
-                const scheduleFloor = scheduleBasedETA.eta_seconds * 0.2;
-
-                const isEarlyTrip = baseTravelTime < 600 || historicalETA.inferred_passed === 0;
-                const isSmallDelay = Math.abs(mlDelay) < 900;
-
-                if (isSmallDelay || isEarlyTrip) {
-                    if (finalETA > scheduleCap && isSmallDelay) {
-                        finalETA = scheduleCap;
-                        methods.push({ method: "schedule_cap_applied", schedule_eta: scheduleBasedETA.eta_seconds });
-                    } else if (finalETA < scheduleFloor && finalETA > 0) {
-                        if (baseTravelTime > 120) {
-                            finalETA = scheduleFloor;
-                            methods.push({ method: "schedule_floor_applied", schedule_eta: scheduleBasedETA.eta_seconds });
-                        }
-                    }
-                }
-            }
-        } else if (hasHistorical) {
-            finalETA = historicalETA.eta_seconds;
-            methods.push({
-                method: "historical_fallback",
-                eta: historicalETA.eta_seconds,
-                base_travel_time: baseTravelTime
-            });
-        } else if (hasSchedule) {
-            finalETA = scheduleBasedETA.eta_seconds;
-            methods.push({
-                method: "schedule_fallback",
-                eta: scheduleBasedETA.eta_seconds
-            });
-        }
-
-        const confidence = this.calculateOverallConfidence(
-            this.calculateWeights(lastConfirmedStop, mlETA, scheduleBasedETA, speedBasedETA),
-            mlETA,
-            lastConfirmedStop,
-            speedBasedETA
-        );
         const uncertaintyRange = this.estimateUncertainty(finalETA, confidence);
 
-        const remainingStopsFull = await this.baseEtaService.busProgressionService.getRemainingStops(busId);
-        let routeEtas = [];
-
-        if (remainingStopsFull && remainingStopsFull.length > 0) {
-            let totalTimeFull = 0;
-            let fromStopId = lastConfirmedStop?.stopId;
-            if (!fromStopId) fromStopId = remainingStopsFull[0].id;
-
-            const segmentTimesFull = [];
-            const pipeline = redis.pipeline();
-            const cacheKeys = [];
-
-            for (const stop of remainingStopsFull) {
-                const cacheKey = `segment:${routeId}:${fromStopId}:${stop.id}`;
-                cacheKeys.push(cacheKey);
-                pipeline.get(cacheKey);
-            }
-
-            const cachedResults = await pipeline.exec();
-
-            const missingSegments = [];
-            for (let i = 0; i < remainingStopsFull.length; i++) {
-                const cachedTime = cachedResults[i][1];
-                const stop = remainingStopsFull[i];
-
-                if (cachedTime) {
-                    const seg = Number(cachedTime);
-                    segmentTimesFull.push(seg);
-                    totalTimeFull += seg;
-                    fromStopId = stop.id;
-                } else {
-                    const currentFromStop = fromStopId;
-                    missingSegments.push({
-                        index: i,
-                        stop: stop,
-                        fromStopId: currentFromStop,
-                        cacheKey: cacheKeys[i]
-                    });
-                    segmentTimesFull.push(null);
-                }
-            }
-
-            if (missingSegments.length > 0) {
-                const fetchPipeline = redis.pipeline();
-                const fetchPromises = [];
-
-                for (const missing of missingSegments) {
-                    fetchPromises.push(
-                        getSegmentTime(missing.fromStopId, missing.stop.id, routeId)
-                    );
-                }
-
-                const segmentTimes = await Promise.all(fetchPromises);
-
-                for (let i = 0; i < missingSegments.length; i++) {
-                    const missing = missingSegments[i];
-                    const segmentTime = segmentTimes[i];
-                    const seg = Number(segmentTime);
-
-                    segmentTimesFull[missing.index] = seg;
-                    totalTimeFull += seg;
-
-                    fetchPipeline.setex(missing.cacheKey, 3600, segmentTime);
-                }
-
-                await fetchPipeline.exec();
-            }
-
-            const timeSinceLastArrival = lastConfirmedStop ? (Date.now() - lastConfirmedStop.arrivedAt) / 1000 : 0;
-            if (timeSinceLastArrival > totalTimeFull * 1.8) {
-                for (const stop of remainingStopsFull) {
-                    routeEtas.push({
-                        stop_id: stop.id,
-                        eta_seconds: 0,
-                        eta_minutes: 0,
-                        is_passed: true
-                    });
-                }
-            } else {
-                let cumulativeTime = 0;
-                let inferredPassedCountFull = 0;
-
-                for (let i = 0; i < remainingStopsFull.length; i++) {
-                    cumulativeTime += segmentTimesFull[i];
-                    if (timeSinceLastArrival > cumulativeTime * 1.8) {
-                        inferredPassedCountFull++;
-                    } else {
-                        break;
-                    }
-                }
-
-                let timeConsumedToInferredPoint = 0;
-                for (let i = 0; i < inferredPassedCountFull; i++) {
-                    timeConsumedToInferredPoint += segmentTimesFull[i];
-                }
-                const timeSinceInferredPoint = timeSinceLastArrival - timeConsumedToInferredPoint;
-
-                let cumulativeBaseTime = 0;
-                const finalDelay = finalETA - baseTravelTime;
-
-                for (let i = 0; i < remainingStopsFull.length; i++) {
-                    if (i < inferredPassedCountFull) {
-                        routeEtas.push({
-                            stop_id: remainingStopsFull[i].id,
-                            eta_seconds: 0,
-                            eta_minutes: 0,
-                            is_passed: true
-                        });
-                    } else {
-                        cumulativeBaseTime += segmentTimesFull[i];
-                        let stopBaseTime;
-
-                        if (i === inferredPassedCountFull) {
-                            const segmentTime = segmentTimesFull[i];
-                            const progress = segmentTime > 0 ? Math.min(1, timeSinceInferredPoint / segmentTime) : 1;
-                            stopBaseTime = segmentTime * (1 - progress);
-                        } else {
-                            stopBaseTime = cumulativeBaseTime - timeSinceInferredPoint;
-                        }
-
-                        const delayFactor = baseTravelTime > 0
-                            ? Math.max(0, Math.min(1, stopBaseTime / baseTravelTime))
-                            : 1;
-                        const proportionalDelay = finalDelay * delayFactor;
-                        let stopEtaSeconds = Math.max(0, stopBaseTime + proportionalDelay);
-
-                        if (stopBaseTime <= 0) {
-                            routeEtas.push({
-                                stop_id: remainingStopsFull[i].id,
-                                eta_seconds: 0,
-                                eta_minutes: 0,
-                                is_passed: true
-                            });
-                        } else {
-                            routeEtas.push({
-                                stop_id: remainingStopsFull[i].id,
-                                eta_seconds: Math.round(stopEtaSeconds),
-                                eta_minutes: Math.round(stopEtaSeconds / 60),
-                                is_passed: false
-                            });
-                        }
-                    }
-                }
-            }
-
-            try {
-                const routeEtaKey = `route_eta:${busId}`;
-                await redis.setex(routeEtaKey, 300, JSON.stringify(routeEtas));
-            } catch (e) {
-                console.warn("Route ETA cache error:", e.message);
-            }
+        try {
+            await redis.setex(`route_eta:${busId}`, 300, JSON.stringify(routeEtas));
+        } catch (e) {
+            console.warn("Route ETA cache error:", e.message);
         }
 
         try {
             await emitBusETA(busId, targetStopId, {
                 eta_seconds: Math.round(finalETA),
                 eta_minutes: Math.round(finalETA / 60),
-                confidence: mlETA?.confidence || 0.5,
                 arrival_time: new Date(Date.now() + finalETA * 1000)
             });
         } catch (e) {
@@ -779,81 +237,445 @@ class ETAFusionEngine {
             console.warn("ETA Redis store error:", e.message);
         }
 
-        const finalResult = {
+        const result = {
             eta_seconds: Math.round(finalETA),
             eta_minutes: Math.round(finalETA / 60),
             arrival_time: new Date(Date.now() + finalETA * 1000),
-            confidence: confidence,
-            freshness_minutes: lastConfirmedStop?.minutesSinceArrival || null,
-            last_confirmed_stop: lastConfirmedStop?.stopId || null,
-            methods_used: methods,
-            weights: this.calculateWeights(lastConfirmedStop, mlETA, scheduleBasedETA, speedBasedETA),
+            confidence,
+            freshness_minutes: lastConfirmedStop?.minutesSinceArrival ?? null,
+            last_confirmed_stop: lastConfirmedStop?.stopId ?? null,
+            methods_used: [{ method }],
+            weights,
             uncertainty_range: uncertaintyRange,
-            route_etas: routeEtas
+            route_etas: routeEtas,
+            is_passed: isTargetPassed
         };
 
-        console.log(`Final ETA Result for Bus ${busId} to Stop ${targetStopId}:`, JSON.stringify(finalResult, null, 2));
+        console.log(`ETA Bus ${busId} → Stop ${targetStopId}: ${Math.round(finalETA / 60)}m [${method}]`);
+        return result;
+    }
 
-        return finalResult;
+    async _isConfirmedStopStale(busId, lastConfirmedStop, tripData) {
+        try {
+            const now = new Date();
+            const currentSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+            const minutesSinceArrival = lastConfirmedStop.minutesSinceArrival ?? 0;
+
+            if (tripData?.activeTrip?.endSecs !== undefined) {
+                let endSecs = tripData.activeTrip.endSecs;
+                if (endSecs < tripData.activeTrip.startSecs) endSecs += 86400;
+                let adjustedCurrent = currentSeconds;
+                if (adjustedCurrent < tripData.activeTrip.startSecs) adjustedCurrent += 86400;
+
+                if (adjustedCurrent > endSecs + 300) {
+                    return true;
+                }
+            }
+
+            if (!tripData?.activeTrip && minutesSinceArrival > 90) {
+                return true;
+            }
+            if (!tripData?.activeTrip && tripData?.nextTrip) {
+                const ttl = await redis.ttl(`bus:${busId}:last_stop`);
+                if (ttl > 3600 && minutesSinceArrival > 30) {
+                    return true;
+                }
+            }
+
+            return false;
+        } catch (e) {
+            console.warn(`_isConfirmedStopStale check failed for bus ${busId}:`, e.message);
+            return false;
+        }
+    }
+
+    async _computeTripETAs({ busId, routeId, lastConfirmedStop, allRouteStops, tripData, targetStopId, data }) {
+        if (lastConfirmedStop) {
+            const isStaleConfirmedStop = await this._isConfirmedStopStale(
+                busId, lastConfirmedStop, tripData
+            );
+
+            if (isStaleConfirmedStop) {
+                console.log(`Bus ${busId}: stale confirmed stop detected — flushing live keys, falling through to schedule`);
+                redis.del(
+                    `bus:${busId}:last_stop`,
+                    `bus:${busId}:last_arrival_time`,
+                    `route_eta:${busId}`,
+                    `speed:${busId}`
+                ).catch(() => {});
+            } else {
+                return this._computeLiveETAs({
+                    busId, routeId, lastConfirmedStop, allRouteStops, targetStopId, tripData, data
+                });
+            }
+        }
+
+        const trip = tripData?.activeTrip ?? tripData?.nextTrip ?? tripData?.firstTrip;
+        if (!trip) {
+            return {
+                routeEtas: [], finalETA: 0, method: 'no_schedule',
+                confidence: 0, weights: { schedule: 1 },
+                isTargetPassed: false
+            };
+        }
+
+        if (tripData.activeTrip) {
+            const activeResult = await this._computeScheduledActiveETAs({ trip, allRouteStops, targetStopId });
+
+            const allPassed = activeResult.routeEtas.length > 0
+                && activeResult.routeEtas.every(e => e.is_passed);
+
+            if (!allPassed) {
+                return activeResult;
+            }
+
+            const fallbackTrip = tripData.nextTrip ?? tripData.firstTrip;
+            if (!fallbackTrip) {
+                return activeResult;
+            }
+
+            return this._computeWaitingETAs({ trip: fallbackTrip, allRouteStops, targetStopId });
+        }
+
+        return this._computeWaitingETAs({ trip, allRouteStops, targetStopId });
+    }
+
+    async _computeLiveETAs({ busId, routeId, lastConfirmedStop, allRouteStops, targetStopId, tripData, data }) {
+        const timeSinceLastArrival = (Date.now() - lastConfirmedStop.arrivedAt) / 1000;
+
+        const lastStopIndex = allRouteStops.findIndex(s => s.id === lastConfirmedStop.stopId);
+        if (lastStopIndex === -1 || lastStopIndex >= allRouteStops.length - 1) {
+            const nextTrip = tripData?.nextTrip ?? tripData?.firstTrip;
+            if (nextTrip) {
+                console.log(`Bus ${busId} at terminus — falling through to next trip schedule`);
+                return this._computeWaitingETAs({ trip: nextTrip, allRouteStops, targetStopId });
+            }
+
+            if (tripData?.activeTrip) {
+                console.log(`Bus ${busId} at terminus — falling through to active trip schedule`);
+                const activeResult = await this._computeScheduledActiveETAs({
+                    trip: tripData.activeTrip, allRouteStops, targetStopId
+                });
+                const allPassed = activeResult.routeEtas.length > 0
+                    && activeResult.routeEtas.every(e => e.is_passed);
+                if (!allPassed) return activeResult;
+
+                const fallback = tripData.firstTrip;
+                if (fallback) return this._computeWaitingETAs({ trip: fallback, allRouteStops, targetStopId });
+            }
+
+            return this._atTerminus(allRouteStops.slice(Math.max(lastStopIndex, 0)));
+        }
+
+        const remainingStops = allRouteStops.slice(lastStopIndex + 1);
+
+        const segmentTimes = await this.base.fetchSegmentTimes(
+            routeId, lastConfirmedStop.stopId, remainingStops
+        );
+
+        let cumulativeTime = 0;
+        let inferredPassedCount = 0;
+        for (let i = 0; i < remainingStops.length; i++) {
+            cumulativeTime += segmentTimes[i];
+            if (timeSinceLastArrival > cumulativeTime * 1.8) inferredPassedCount++;
+            else break;
+        }
+
+        if (inferredPassedCount >= remainingStops.length) {
+            return {
+                routeEtas: remainingStops.map(s => ({
+                    stop_id: s.id, eta_seconds: 0, eta_minutes: 0, is_passed: true
+                })),
+                finalETA: 0,
+                method: 'live_all_inferred_passed',
+                confidence: 0.9,
+                weights: { historical: 1, ml: 0, speed: 0, schedule: 0 },
+                isTargetPassed: true
+            };
+        }
+
+        let timeConsumedToInferred = 0;
+        for (let i = 0; i < inferredPassedCount; i++) timeConsumedToInferred += segmentTimes[i];
+        const timeSinceInferred = timeSinceLastArrival - timeConsumedToInferred;
+
+        let cumulativeBase = 0;
+        const baseStopETAs = [];
+        for (let i = 0; i < remainingStops.length; i++) {
+            if (i < inferredPassedCount) {
+                baseStopETAs.push(0);
+                continue;
+            }
+            cumulativeBase += segmentTimes[i];
+            let stopBase;
+            if (i === inferredPassedCount) {
+                const seg = segmentTimes[i];
+                const progress = seg > 0 ? Math.min(1, timeSinceInferred / seg) : 1;
+                stopBase = Math.max(0, seg * (1 - progress));
+            } else {
+                stopBase = Math.max(0, cumulativeBase - timeSinceInferred);
+            }
+            baseStopETAs.push(stopBase);
+        }
+
+        const targetIdx = targetStopId != null
+            ? remainingStops.findIndex(s => s.id == targetStopId)
+            : remainingStops.length - 1;
+        const effectiveTargetIdx = targetIdx === -1 ? remainingStops.length - 1 : targetIdx;
+
+        const baseTargetETA = baseStopETAs[effectiveTargetIdx] ?? 0;
+        const isTargetPassedInBase = baseTargetETA === 0 && effectiveTargetIdx < inferredPassedCount;
+
+        if (isTargetPassedInBase) {
+            return {
+                routeEtas: remainingStops.map((s, i) => ({
+                    stop_id: s.id,
+                    eta_seconds: Math.round(baseStopETAs[i]),
+                    eta_minutes: Math.round(baseStopETAs[i] / 60),
+                    is_passed: baseStopETAs[i] === 0
+                })),
+                finalETA: 0,
+                method: 'live',
+                confidence: 1,
+                weights: { historical: 1, ml: 0, speed: 0, schedule: 0 },
+                isTargetPassed: true
+            };
+        }
+
+        let baseTravelTime = 0;
+        for (let i = inferredPassedCount; i <= effectiveTargetIdx; i++) {
+            baseTravelTime += segmentTimes[i];
+        }
+        baseTravelTime = Math.max(0, baseTravelTime - timeSinceInferred);
+
+        let speedETA = null;
+        let speedConf = 0;
+        try {
+            const currentSpeed = await this.base.deriveCurrentSpeed(busId, routeId, lastConfirmedStop);
+            if (currentSpeed) {
+                const stopsToTarget = remainingStops.slice(0, effectiveTargetIdx + 1);
+                const distances = await this.base.fetchSegmentDistances(
+                    routeId, lastConfirmedStop.stopId, stopsToTarget
+                );
+                const totalDist = distances.reduce((a, b) => a + b, 0);
+                if (totalDist > 0) {
+                    speedETA = (totalDist * 0.85) / currentSpeed;
+                    speedConf = this.base.calculateSpeedConfidence(currentSpeed, timeSinceLastArrival);
+                }
+            }
+        } catch (e) {
+            console.warn("Speed ETA failed:", e.message);
+        }
+
+        const mlETA = await predictETAWithML(data);
+        const hasML = mlETA?.mlPrediction != null && mlETA?.confidence != null;
+        const hasSpeed = speedETA != null && speedETA > 0;
+
+        let finalETA = baseTargetETA;
+
+        if (hasSpeed && baseTravelTime > 0) {
+            const sw = speedConf;
+            finalETA = speedETA * sw + baseTargetETA * (1 - sw);
+
+            if (hasML) {
+                const mlDelay = mlETA.mlDelay ?? (mlETA.mlPrediction - baseTravelTime);
+                const mw = mlETA.confidence * 0.4;
+                finalETA = Math.max(0, finalETA * (1 - mw) + (baseTravelTime + mlDelay) * mw);
+            }
+        } else if (hasML && baseTravelTime > 0) {
+            const mlDelay = mlETA.mlDelay ?? (mlETA.mlPrediction - baseTravelTime);
+            finalETA = Math.max(0, baseTravelTime + mlDelay);
+        }
+
+        finalETA = Math.max(0, finalETA);
+
+        const totalDelay = finalETA - baseTargetETA;
+        const routeEtas = remainingStops.map((s, i) => {
+            const base = baseStopETAs[i];
+            if (base === 0) {
+                return { stop_id: s.id, eta_seconds: 0, eta_minutes: 0, is_passed: true };
+            }
+            let stopEta = base;
+            if (totalDelay !== 0 && baseTargetETA > 0) {
+                const ratio = Math.min(1, base / baseTargetETA);
+                stopEta = Math.max(0, base + totalDelay * ratio);
+            }
+            return {
+                stop_id: s.id,
+                eta_seconds: Math.round(stopEta),
+                eta_minutes: Math.round(stopEta / 60),
+                is_passed: false
+            };
+        });
+
+        const speedObj = hasSpeed ? { eta_seconds: speedETA, confidence: speedConf } : { eta_seconds: null };
+        const scheduleObj = { eta_seconds: null, is_waiting: false };
+        const weights = this.calculateWeights(lastConfirmedStop, mlETA, scheduleObj, speedObj);
+        const confidence = this.calculateOverallConfidence(weights, mlETA, lastConfirmedStop, speedObj);
+
+        this.base.logTrainingData(
+            busId, targetStopId, finalETA, baseTravelTime,
+            inferredPassedCount, timeSinceLastArrival,
+            segmentTimes.slice(0, effectiveTargetIdx + 1)
+        ).catch(() => {});
+
+        return {
+            routeEtas,
+            finalETA,
+            method: 'live',
+            confidence,
+            weights,
+            baseTravelTime,
+            isTargetPassed: false
+        };
+    }
+
+    async _computeScheduledActiveETAs({ trip, allRouteStops, targetStopId }) {
+        const now = new Date();
+        const normalizedCurrent = trip.normalizedCurrentSeconds
+            ?? (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds());
+
+        const tripStopMap = new Map(trip.stops.map(s => [String(s.stop_id), s]));
+
+        const routeEtas = [];
+        for (const routeStop of allRouteStops) {
+            const tripStop = tripStopMap.get(String(routeStop.id));
+            if (!tripStop) continue;
+
+            const scheduledSecs = tripStop.tMs / 1000;
+            const isPassed = normalizedCurrent >= scheduledSecs;
+            const etaSecs = isPassed ? 0 : Math.round(scheduledSecs - normalizedCurrent);
+
+            routeEtas.push({
+                stop_id: routeStop.id,
+                eta_seconds: etaSecs,
+                eta_minutes: Math.round(etaSecs / 60),
+                is_passed: isPassed
+            });
+        }
+
+        const targetEntry = routeEtas.find(e => e.stop_id == targetStopId)
+            ?? routeEtas[routeEtas.length - 1];
+
+        const finalETA = targetEntry?.eta_seconds ?? 0;
+
+        return {
+            routeEtas,
+            finalETA,
+            method: 'schedule_active',
+            confidence: 0.7,
+            weights: { schedule: 1, historical: 0, ml: 0, speed: 0 },
+            isTargetPassed: targetEntry?.is_passed ?? false
+        };
+    }
+
+    async _computeWaitingETAs({ trip, allRouteStops, targetStopId }) {
+        const now = new Date();
+        const currentSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+
+        let waitTimeSecs = trip.startSecs - currentSeconds;
+        if (waitTimeSecs < 0) waitTimeSecs += 86400;
+
+        const firstTripStop = trip.stops[0];
+        const tripStopMap = new Map(trip.stops.map(s => [String(s.stop_id), s]));
+
+        const routeEtas = [];
+        for (const routeStop of allRouteStops) {
+            const tripStop = tripStopMap.get(String(routeStop.id));
+            if (!tripStop) continue;
+
+            const transitFromStart = (tripStop.tMs - firstTripStop.tMs) / 1000;
+            const etaSecs = Math.max(0, Math.round(waitTimeSecs + transitFromStart));
+
+            routeEtas.push({
+                stop_id: routeStop.id,
+                eta_seconds: etaSecs,
+                eta_minutes: Math.round(etaSecs / 60),
+                is_passed: false,
+                is_waiting: true
+            });
+        }
+
+        const targetEntry = routeEtas.find(e => e.stop_id == targetStopId)
+            ?? routeEtas[routeEtas.length - 1];
+
+        const finalETA = targetEntry?.eta_seconds ?? 0;
+
+        return {
+            routeEtas,
+            finalETA,
+            method: 'waiting_for_trip',
+            confidence: 0.5,
+            weights: { schedule: 1, historical: 0, ml: 0, speed: 0 },
+            isTargetPassed: false
+        };
+    }
+
+    _emptyResult(lastConfirmedStop) {
+        return {
+            eta_seconds: 0, eta_minutes: 0,
+            arrival_time: null, confidence: 0,
+            freshness_minutes: null,
+            last_confirmed_stop: lastConfirmedStop?.stopId ?? null,
+            methods_used: [{ method: 'no_data' }],
+            weights: {},
+            uncertainty_range: {},
+            route_etas: [],
+            is_passed: false
+        };
+    }
+
+    _atTerminus(remainingStops) {
+        return {
+            routeEtas: remainingStops.map(s => ({
+                stop_id: s.id, eta_seconds: 0, eta_minutes: 0, is_passed: true
+            })),
+            finalETA: 0,
+            method: 'at_terminus',
+            confidence: 1,
+            weights: { historical: 1 },
+            isTargetPassed: true
+        };
     }
 
     calculateWeights(lastConfirmedStop, mlETA, scheduleBasedETA, speedBasedETA = null, tripDurationMinutes = 120) {
         const weights = { schedule: 0, historical: 0, ml: 0, speed: 0 };
 
         const activeThresholdMinutes = Math.min(240, Math.max(30, tripDurationMinutes * 1.5));
-        const isActuallyActive = lastConfirmedStop && lastConfirmedStop.minutesSinceArrival < activeThresholdMinutes;
 
         if (scheduleBasedETA?.is_waiting && !lastConfirmedStop) {
             weights.schedule = 1.0;
             return weights;
         }
 
-        if (!lastConfirmedStop && (!mlETA.mlPrediction || mlETA.confidence === undefined)) {
+        if (!lastConfirmedStop && (!mlETA?.mlPrediction || mlETA?.confidence === undefined)) {
             weights.schedule = 1.0;
-            weights.historical = 0;
-            weights.ml = 0;
-            weights.speed = 0;
-
             return this.normalizeWeights(weights);
         }
 
-        if (speedBasedETA?.confidence && speedBasedETA.eta_seconds !== null) {
-            const speedConfidence = speedBasedETA.confidence;
-            weights.speed = speedConfidence * 0.8;
-
-            const remainingWeight = 1 - weights.speed;
-            weights.historical = remainingWeight * 0.6;
-            weights.ml = remainingWeight * 0.3;
-            weights.schedule = remainingWeight * 0.1;
-        } else if (mlETA.mlPrediction && mlETA.confidence !== undefined) {
-            const mlConfidence = mlETA.confidence;
-
-            let mlWeight = this.calculateMlWeight(mlConfidence);
-
+        if (speedBasedETA?.confidence && speedBasedETA?.eta_seconds != null) {
+            const speedConf = speedBasedETA.confidence;
+            weights.speed = speedConf * 0.8;
+            const remaining = 1 - weights.speed;
+            weights.historical = remaining * 0.6;
+            weights.ml = remaining * 0.3;
+            weights.schedule = remaining * 0.1;
+        } else if (mlETA?.mlPrediction && mlETA?.confidence != null) {
+            const mlConf = mlETA.confidence;
+            let mlWeight = this.calculateMlWeight(mlConf);
             const minutesSince = lastConfirmedStop?.minutesSinceArrival || 0;
+            const ageFactor = Math.exp(-minutesSince / 60);
+            mlWeight = Math.max(0.05, mlWeight * ageFactor);
 
-            const mlAgeFactor = Math.exp(-minutesSince / 60);
-            mlWeight = mlWeight * mlAgeFactor;
-
-            if (lastConfirmedStop && mlWeight < 0.15) {
-                mlWeight = 0.15 * mlAgeFactor;
-                mlWeight = Math.max(0.05, mlWeight);
+            let scheduleWeight = 0;
+            if (!(scheduleBasedETA?.is_waiting && lastConfirmedStop)) {
+                scheduleWeight = Math.min(this.calculateScheduleWeight(mlConf), 0.15);
             }
-
-            let scheduleWeight = Math.min(this.calculateScheduleWeight(mlConfidence), 0.15);
-
-            if (scheduleBasedETA?.is_waiting && lastConfirmedStop) {
-                scheduleWeight = 0;
-            }
-
-            const historicalWeight = Math.max(0, 1 - mlWeight - scheduleWeight);
 
             weights.ml = Math.max(0, Math.min(1, mlWeight));
             weights.schedule = Math.max(0, Math.min(1, scheduleWeight));
-            weights.historical = Math.max(0, Math.min(1, historicalWeight));
+            weights.historical = Math.max(0, 1 - mlWeight - scheduleWeight);
         } else {
             const minutesSince = lastConfirmedStop?.minutesSinceArrival || 0;
-
             const ageFactor = Math.exp(-minutesSince / 15);
 
             if (scheduleBasedETA?.is_waiting && lastConfirmedStop) {
@@ -863,7 +685,6 @@ class ETAFusionEngine {
                 weights.historical = 0.85 * ageFactor;
                 weights.schedule = 1 - weights.historical;
             }
-
             weights.ml = 0;
         }
 
@@ -876,19 +697,15 @@ class ETAFusionEngine {
         if (mlETA?.confidence && weights.ml > 0) {
             confidence += mlETA.confidence * weights.ml;
         }
-
         if (weights.historical > 0) {
-            const historicalConf = lastConfirmedStop
-                ? Math.max(0.3, 0.8 - (lastConfirmedStop.minutesSinceArrival / 30))
+            const histConf = lastConfirmedStop
+                ? Math.max(0.3, 0.8 - lastConfirmedStop.minutesSinceArrival / 30)
                 : 0.3;
-
-            confidence += historicalConf * weights.historical;
+            confidence += histConf * weights.historical;
         }
-
         if (weights.schedule > 0) {
             confidence += 0.4 * weights.schedule;
         }
-
         if (weights.speed > 0 && speedBasedETA?.confidence) {
             confidence += speedBasedETA.confidence * weights.speed;
         }
@@ -897,52 +714,32 @@ class ETAFusionEngine {
     }
 
     estimateUncertainty(eta_seconds, confidence) {
-        let uncertainty_pct = eta_seconds > 600 ? 0.3 : 0.2;
-
-        if (confidence > 0.7) {
-            uncertainty_pct *= 0.6;
-        } else if (confidence > 0.5) {
-            uncertainty_pct *= 0.75;
-        } else {
-            uncertainty_pct *= 0.95;
-        }
+        let pct = eta_seconds > 600 ? 0.3 : 0.2;
+        if (confidence > 0.7) pct *= 0.6;
+        else if (confidence > 0.5) pct *= 0.75;
+        else pct *= 0.95;
 
         return {
-            min_seconds: Math.max(0, Math.round(eta_seconds * (1 - uncertainty_pct))),
-            max_seconds: Math.round(eta_seconds * (1 + uncertainty_pct)),
-            min_minutes: Math.max(0, Math.round(eta_seconds * (1 - uncertainty_pct) / 60)),
-            max_minutes: Math.round(eta_seconds * (1 + uncertainty_pct) / 60),
-            min_arrival_time: new Date(Date.now() + Math.max(0, Math.round(eta_seconds * (1 - uncertainty_pct))) * 1000),
-            max_arrival_time: new Date(Date.now() + Math.round(eta_seconds * (1 + uncertainty_pct)) * 1000),
+            min_seconds: Math.max(0, Math.round(eta_seconds * (1 - pct))),
+            max_seconds: Math.round(eta_seconds * (1 + pct)),
+            min_minutes: Math.max(0, Math.round(eta_seconds * (1 - pct) / 60)),
+            max_minutes: Math.round(eta_seconds * (1 + pct) / 60),
+            min_arrival_time: new Date(Date.now() + Math.max(0, Math.round(eta_seconds * (1 - pct))) * 1000),
+            max_arrival_time: new Date(Date.now() + Math.round(eta_seconds * (1 + pct)) * 1000)
         };
     }
 
     calculateMlWeight(confidence) {
-        const maxWeight = 0.70;
-        const steepness = 8;
-        const midpoint = 0.5;
-
-        const sigmoidValue = maxWeight / (1 + Math.exp(-steepness * (confidence - midpoint)));
-
-        return sigmoidValue;
+        return 0.70 / (1 + Math.exp(-8 * (confidence - 0.5)));
     }
 
     calculateScheduleWeight(confidence) {
-        const minWeight = 0.05;
-        const maxWeight = 0.70;
-
-        const scheduleWeight = minWeight + (maxWeight - minWeight) * (1 - confidence);
-
-        return scheduleWeight;
+        return 0.05 + 0.65 * (1 - confidence);
     }
 
     normalizeWeights(weights) {
         const sum = Object.values(weights).reduce((a, b) => a + b, 0);
-
-        if (sum === 0) {
-            return { schedule: 1, historical: 0, ml: 0, speed: 0 };
-        }
-
+        if (sum === 0) return { schedule: 1, historical: 0, ml: 0, speed: 0 };
         return {
             schedule: weights.schedule / sum,
             historical: weights.historical / sum,

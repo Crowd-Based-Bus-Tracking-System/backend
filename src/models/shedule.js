@@ -3,14 +3,18 @@ import pool from "../config/db.js";
 export const getActiveOrNextTripForBus = async (busId) => {
     const tripsResult = await pool.query(`
         SELECT t.id as trip_id, t.start_time, t.end_time,
-               ts.stop_id, ts.scheduled_arrival_time as sheduled_arrival_time, ts.stop_sequence
+               ts.stop_id, ts.scheduled_arrival_time as sheduled_arrival_time, ts.stop_sequence,
+               b.current_trip_id
         FROM trips t
         JOIN trip_schedules ts ON ts.trip_id = t.id
+        JOIN buses b ON b.id = t.bus_id
         WHERE t.bus_id = $1
         ORDER BY t.start_time ASC, ts.stop_sequence ASC
     `, [busId]);
 
     if (tripsResult.rows.length === 0) return null;
+
+    const activeTripIdFromDb = tripsResult.rows[0].current_trip_id;
 
     const parseTime = (timeStr) => {
         const [h, m, s] = timeStr.split(':').map(Number);
@@ -60,25 +64,44 @@ export const getActiveOrNextTripForBus = async (busId) => {
 
     for (const trip of trips) {
         const crossesMidnight = trip.endSecs > 86400;
+        let isActive = false;
+        let normCurrent = currentSeconds;
+
         if (crossesMidnight) {
             const adjustedCurrent = currentSeconds < trip.startSecs
                 ? currentSeconds + 86400
                 : currentSeconds;
             if (adjustedCurrent >= trip.startSecs && adjustedCurrent <= trip.endSecs) {
-                activeTrip = trip;
-                activeTrip.normalizedCurrentSeconds = adjustedCurrent;
-                break;
+                isActive = true;
+                normCurrent = adjustedCurrent;
             }
         } else {
             if (currentSeconds >= trip.startSecs && currentSeconds <= trip.endSecs) {
-                activeTrip = trip;
-                activeTrip.normalizedCurrentSeconds = currentSeconds;
-                break;
+                isActive = true;
             }
         }
-        if (trip.startSecs > currentSeconds && !nextTrip) {
-            nextTrip = trip;
+
+        if (isActive) {
+            if (trip.id === activeTripIdFromDb) {
+                activeTrip = { ...trip, normalizedCurrentSeconds: normCurrent };
+            }
+            else if (!activeTrip || (activeTrip.id !== activeTripIdFromDb && trip.startSecs > activeTrip.startSecs)) {
+                activeTrip = { ...trip, normalizedCurrentSeconds: normCurrent };
+            }
         }
+    }
+
+    for (const trip of trips) {
+        if (trip.startSecs > currentSeconds) {
+            if (activeTrip && trip.id === activeTrip.id) continue;
+            if (!nextTrip || trip.startSecs < nextTrip.startSecs) {
+                nextTrip = trip;
+            }
+        }
+    }
+
+    if (!nextTrip && !activeTrip) {
+        nextTrip = trips[0];
     }
 
     return { activeTrip, nextTrip, firstTrip: trips[0] };
