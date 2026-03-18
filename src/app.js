@@ -21,7 +21,10 @@ const httpServer = createServer(app);
 initializeSocket(httpServer);
 startTripAssignerCron();
 
-app.use(cors());
+app.use(cors({
+  origin: ["https://frontend-ten-iota-76.vercel.app/", "http://localhost:8080"],
+  credentials: true
+}));
 app.use(express.json());
 
 app.use("/api/arrival", arrivalRouter);
