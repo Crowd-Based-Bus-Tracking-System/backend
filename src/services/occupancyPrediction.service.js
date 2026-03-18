@@ -123,7 +123,7 @@ class OccupancyPredictionEngine {
     }
 
     calculateOverallConfidence(weights, mlResult, historicalSamples, recentLevel) {
-        let confidence = 0.3; // Base
+        let confidence = 0.3;
 
         if (recentLevel !== null) confidence += 0.3;
         if (historicalSamples > 10) confidence += 0.2;
