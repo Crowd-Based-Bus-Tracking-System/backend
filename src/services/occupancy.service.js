@@ -9,7 +9,7 @@ import { getBusById } from "../models/bus.js";
 import { getRouteStops } from "../models/route.js";
 import { getActiveOrNextTripForBus } from "../models/shedule.js";
 
-const MIN_REPORTS = 3;
+const MIN_REPORTS = 2;
 const MIN_REPORT_INTERVAL = 60 * 1000;
 const OCCUPANCY_EXPIRATION = 300;
 const RADIUS_MIN_METERS = 999999999999999999999999;
